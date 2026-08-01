@@ -12,5 +12,6 @@ let package = Package(
         .target(name: "ThinkingCapsTestSupport", dependencies: ["ThinkingCapsCore"]),
         .executableTarget(name: "BlinkerTests", dependencies: ["ThinkingCapsCore", "ThinkingCapsTestSupport", "MiniTest"]),
         .executableTarget(name: "HookSocketServerTests", dependencies: ["ThinkingCapsCore", "ThinkingCapsTestSupport", "MiniTest"]),
+        .executableTarget(name: "ClaudeHookInstallerTests", dependencies: ["ThinkingCapsCore", "MiniTest"]),
     ]
 )
