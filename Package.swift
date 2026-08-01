@@ -16,6 +16,7 @@ let package = Package(
         .target(name: "HookNotifyCore"),
         .executableTarget(name: "HookNotify", dependencies: ["HookNotifyCore"]),
         .executableTarget(name: "PayloadParsingTests", dependencies: ["HookNotifyCore", "MiniTest"]),
+        .executableTarget(name: "OnboardingFlowTests", dependencies: ["ThinkingCapsCore", "MiniTest"]),
         .executableTarget(name: "ThinkingCaps", dependencies: ["ThinkingCapsCore"]),
     ]
 )

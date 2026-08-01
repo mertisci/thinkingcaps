@@ -3,6 +3,8 @@ import AppKit
 public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItemController: StatusItemController?
     private var socketServer: HookSocketServer?
+    private var onboardingController: OnboardingWindowController?
+    private static let hasCompletedOnboardingKey = "hasCompletedOnboarding"
 
     public override init() {
         super.init()
@@ -34,6 +36,24 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItemController = StatusItemController(socketServer: server, launchAtLogin: launchAtLogin)
 
         installClaudeHookIfNeeded()
+
+        let initialScreen = OnboardingFlow.initialScreen(
+            permissionGranted: InputMonitoringPermission.isGranted(),
+            hasCompletedOnboarding: UserDefaults.standard.bool(forKey: Self.hasCompletedOnboardingKey)
+        )
+        if let initialScreen {
+            presentOnboarding(initialScreen)
+        }
+    }
+
+    private func presentOnboarding(_ screen: OnboardingScreen) {
+        let controller = OnboardingWindowController(initialScreen: screen) {
+            UserDefaults.standard.set(true, forKey: Self.hasCompletedOnboardingKey)
+        }
+        onboardingController = controller
+        controller.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        controller.window?.makeKeyAndOrderFront(nil)
     }
 
     private func installClaudeHookIfNeeded() {
