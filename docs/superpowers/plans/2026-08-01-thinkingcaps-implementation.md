@@ -1576,6 +1576,8 @@ Verify:
 
 Note: `Bundle.main.bundlePath` won't resolve to a real `hook-notify` path when run via `swift run` (there's no `.app` bundle yet), so end-to-end hook testing with a real `claude` command happens after Task 10, not here.
 
+**Warning, confirmed the hard way during this task's own verification:** `applicationDidFinishLaunching` calls `installClaudeHookIfNeeded()` unconditionally, on every launch — including a bare `swift run ThinkingCaps` smoke test. It writes into the REAL, global `~/.claude/settings.json` (not anything scoped to this project's worktree), with a broken `hook-notify` path since there's no real `.app` bundle yet. Running this step *will* add that broken entry to the live settings file every time. Before/after running this step, check whether `~/.claude/settings.json` already had a user-configured `"hooks"` section: if it didn't, remove the whole `"hooks"` key afterward to restore the pre-test state; if it did, remove only the two entries this run added (matching the broken `.build/.../hook-notify` path) and leave everything else untouched. Do this cleanup after every `swift run ThinkingCaps` test cycle until Task 10 packages a real `.app` bundle, at which point a correct hook install becomes the intended, permanent behavior.
+
 - [ ] **Step 6: Commit**
 
 ```bash
