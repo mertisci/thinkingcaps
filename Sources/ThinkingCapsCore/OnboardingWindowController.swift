@@ -16,6 +16,7 @@ public final class OnboardingWindowController: NSWindowController, NSWindowDeleg
             defer: false
         )
         window.title = "ThinkingCaps Setup"
+        window.isReleasedWhenClosed = false
         super.init(window: window)
         window.delegate = self
         showScreen(initialScreen)
