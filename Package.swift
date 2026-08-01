@@ -9,5 +9,7 @@ let package = Package(
         .target(name: "MiniTest"),
         .target(name: "ThinkingCapsCore"),
         .executableTarget(name: "SessionTrackerTests", dependencies: ["ThinkingCapsCore", "MiniTest"]),
+        .target(name: "ThinkingCapsTestSupport", dependencies: ["ThinkingCapsCore"]),
+        .executableTarget(name: "BlinkerTests", dependencies: ["ThinkingCapsCore", "ThinkingCapsTestSupport", "MiniTest"]),
     ]
 )
