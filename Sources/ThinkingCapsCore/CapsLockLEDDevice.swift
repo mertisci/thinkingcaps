@@ -29,6 +29,8 @@ public final class IOKitCapsLockLEDDevice: CapsLockLEDDevice {
             return
         }
         for candidate in devices {
+            let product = IOHIDDeviceGetProperty(candidate, kIOHIDProductKey as CFString) as? String ?? ""
+            guard product.localizedCaseInsensitiveContains("Internal Keyboard") else { continue }
             guard let elements = IOHIDDeviceCopyMatchingElements(candidate, nil, IOOptionBits(kIOHIDOptionsTypeNone)) as? [IOHIDElement] else {
                 continue
             }
