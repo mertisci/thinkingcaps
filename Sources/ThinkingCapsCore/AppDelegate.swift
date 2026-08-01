@@ -1,0 +1,56 @@
+import AppKit
+
+public final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var statusItemController: StatusItemController?
+    private var socketServer: HookSocketServer?
+
+    public override init() {
+        super.init()
+    }
+
+    public func applicationDidFinishLaunching(_ notification: Notification) {
+        let appSupportDir = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ThinkingCaps")
+        try? FileManager.default.createDirectory(at: appSupportDir, withIntermediateDirectories: true)
+        let socketPath = appSupportDir.appendingPathComponent("ctl.sock").path
+
+        let ledDevice = IOKitCapsLockLEDDevice()
+        let blinker = Blinker(device: ledDevice)
+        let server = HookSocketServer(socketPath: socketPath, blinker: blinker)
+        self.socketServer = server
+        do {
+            try server.start()
+        } catch {
+            NSLog("ThinkingCaps: failed to start hook socket server: \(error)")
+        }
+
+        let launchAtLogin = LaunchAtLogin()
+        if !UserDefaults.standard.bool(forKey: "hasRunBefore") {
+            launchAtLogin.setEnabled(true)
+            UserDefaults.standard.set(true, forKey: "hasRunBefore")
+        }
+
+        statusItemController = StatusItemController(socketServer: server, launchAtLogin: launchAtLogin)
+
+        installClaudeHookIfNeeded()
+    }
+
+    private func installClaudeHookIfNeeded() {
+        let settingsURL = FileManager.default
+            .homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/settings.json")
+        let notifierPath = Bundle.main.bundlePath + "/Contents/MacOS/hook-notify"
+        let installer = ClaudeHookInstaller(settingsURL: settingsURL)
+        do {
+            try installer.install(notifierPath: notifierPath)
+        } catch {
+            NSLog("ThinkingCaps: failed to install Claude Code hooks: \(error)")
+        }
+    }
+
+    public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        socketServer?.stop()
+        return .terminateNow
+    }
+}
