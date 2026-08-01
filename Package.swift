@@ -6,5 +6,7 @@ let package = Package(
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(name: "LEDSpike"),
+        .target(name: "ThinkingCapsCore"),
+        .testTarget(name: "ThinkingCapsCoreTests", dependencies: ["ThinkingCapsCore"]),
     ]
 )
