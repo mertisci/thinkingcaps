@@ -6,7 +6,7 @@
 
 **Architecture:** A Swift Package Manager project with a small library (`ThinkingCapsCore`) holding all logic (session tracking, LED control, socket server, hook installer, launch-at-login, status bar UI), a thin `ThinkingCaps` executable that wires it into an `NSApplication`, and a separate `HookNotify` helper binary that Claude Code's hooks invoke to signal start/stop over a local unix socket. A standalone `LEDSpike` diagnostic tool validates the riskiest assumption (direct LED control) before the rest is built.
 
-**Tech Stack:** Swift 5.9, Swift Package Manager, AppKit, IOKit (HID), ServiceManagement (`SMAppService`), Foundation/Darwin raw sockets, XCTest.
+**Tech Stack:** Swift 5.9, Swift Package Manager, AppKit, IOKit (HID), ServiceManagement (`SMAppService`), Foundation/Darwin raw sockets, a small hand-rolled `MiniTest` assertion helper (see Global Constraints — this machine has no XCTest).
 
 ## Global Constraints
 
@@ -17,6 +17,7 @@
 - The physical CapsLock key's real typing behavior (uppercase/lowercase) must never be affected by our code — we only ever set/read the LED value, never the modifier state.
 - Every Claude Code hook command must exit 0 unconditionally and never block or slow down Claude Code, even if ThinkingCaps isn't running or errors internally.
 - Distribution for v1: ad-hoc codesign only (unsigned), public GitHub repo, MIT license.
+- **Testing:** this machine has only Command Line Tools installed, not full Xcode — `XCTest`/`swift test` do not work here (confirmed directly: `unable to resolve module dependency: 'XCTest'`). Every task that needs tests uses a plain `.executableTarget` and the small `MiniTest` helper (introduced in Task 2, `Sources/MiniTest/MiniTest.swift`) instead of `.testTarget`/`XCTest`. Tests are run with `swift run <TargetName>` (e.g. `swift run SessionTrackerTests`), not `swift test`. Because there's no `@testable import`, anything a test target needs to call on `ThinkingCapsCore` must be `public`, and shared test doubles (like `FakeCapsLockLEDDevice`) live in their own small library target (`ThinkingCapsTestSupport`) so more than one test executable can import them.
 
 ---
 
@@ -146,17 +147,19 @@ git commit -m "Add CapsLock LED diagnostic spike"
 
 ---
 
-### Task 2: SessionTracker (pure logic, TDD)
+### Task 2: MiniTest helper + SessionTracker (pure logic, TDD)
 
 **Files:**
 - Modify: `Package.swift`
+- Create: `Sources/MiniTest/MiniTest.swift`
 - Create: `Sources/ThinkingCapsCore/SessionTracker.swift`
-- Test: `Tests/ThinkingCapsCoreTests/SessionTrackerTests.swift`
+- Test: `Sources/SessionTrackerTests/main.swift`
 
 **Interfaces:**
+- Produces: `public final class MiniTest` with `public init()`, `public func check(_ condition: @autoclosure () -> Bool, _ description: String)`, `public func finish() -> Never`. Used by every later test executable (Tasks 3, 4, 5, 6).
 - Produces: `struct SessionTracker` with `init(timeout: TimeInterval = 600)`, `var isEmpty: Bool`, `mutating func start(_ id: String, now: Date = Date())`, `mutating func stop(_ id: String)`, `mutating func purgeExpired(now: Date = Date())`. Used by Task 4 (`HookSocketServer`).
 
-- [ ] **Step 1: Expand `Package.swift` to add the core library and its test target**
+- [ ] **Step 1: Expand `Package.swift` to add the core library, the MiniTest helper, and the test executable**
 
 ```swift
 // swift-tools-version:5.9
@@ -167,71 +170,112 @@ let package = Package(
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(name: "LEDSpike"),
+        .target(name: "MiniTest"),
         .target(name: "ThinkingCapsCore"),
-        .testTarget(name: "ThinkingCapsCoreTests", dependencies: ["ThinkingCapsCore"]),
+        .executableTarget(name: "SessionTrackerTests", dependencies: ["ThinkingCapsCore", "MiniTest"]),
     ]
 )
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [ ] **Step 2: Write the MiniTest helper**
 
-Create `Tests/ThinkingCapsCoreTests/SessionTrackerTests.swift`:
+This machine has no XCTest (see Global Constraints), so every test in this plan is a plain executable using this tiny helper instead. Create `Sources/MiniTest/MiniTest.swift`:
 
 ```swift
-import XCTest
-@testable import ThinkingCapsCore
+import Foundation
 
-final class SessionTrackerTests: XCTestCase {
-    func test_newTracker_isEmpty() {
-        let tracker = SessionTracker()
-        XCTAssertTrue(tracker.isEmpty)
+public final class MiniTest {
+    private var failureCount = 0
+    private var totalCount = 0
+
+    public init() {}
+
+    public func check(_ condition: @autoclosure () -> Bool, _ description: String) {
+        totalCount += 1
+        if condition() {
+            print("PASS: \(description)")
+        } else {
+            failureCount += 1
+            print("FAIL: \(description)")
+        }
     }
 
-    func test_start_makesTrackerNonEmpty() {
-        var tracker = SessionTracker()
-        tracker.start("session-1")
-        XCTAssertFalse(tracker.isEmpty)
-    }
-
-    func test_stop_removesSession() {
-        var tracker = SessionTracker()
-        tracker.start("session-1")
-        tracker.stop("session-1")
-        XCTAssertTrue(tracker.isEmpty)
-    }
-
-    func test_stop_onlyRemovesMatchingSession() {
-        var tracker = SessionTracker()
-        tracker.start("session-1")
-        tracker.start("session-2")
-        tracker.stop("session-1")
-        XCTAssertFalse(tracker.isEmpty)
-    }
-
-    func test_purgeExpired_removesSessionsOlderThanTimeout() {
-        var tracker = SessionTracker(timeout: 600)
-        let start = Date(timeIntervalSince1970: 0)
-        tracker.start("stale-session", now: start)
-        tracker.purgeExpired(now: start.addingTimeInterval(601))
-        XCTAssertTrue(tracker.isEmpty)
-    }
-
-    func test_purgeExpired_keepsSessionsWithinTimeout() {
-        var tracker = SessionTracker(timeout: 600)
-        let start = Date(timeIntervalSince1970: 0)
-        tracker.start("fresh-session", now: start)
-        tracker.purgeExpired(now: start.addingTimeInterval(300))
-        XCTAssertFalse(tracker.isEmpty)
+    public func finish() -> Never {
+        print("\(totalCount - failureCount)/\(totalCount) passed")
+        exit(failureCount == 0 ? 0 : 1)
     }
 }
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [ ] **Step 3: Write the failing tests**
 
-Run: `swift test --filter SessionTrackerTests`
+Create `Sources/SessionTrackerTests/main.swift`:
+
+```swift
+import Foundation
+import MiniTest
+import ThinkingCapsCore
+
+let t = MiniTest()
+
+func test_newTracker_isEmpty() {
+    let tracker = SessionTracker()
+    t.check(tracker.isEmpty, "new tracker is empty")
+}
+
+func test_start_makesTrackerNonEmpty() {
+    var tracker = SessionTracker()
+    tracker.start("session-1")
+    t.check(!tracker.isEmpty, "start makes tracker non-empty")
+}
+
+func test_stop_removesSession() {
+    var tracker = SessionTracker()
+    tracker.start("session-1")
+    tracker.stop("session-1")
+    t.check(tracker.isEmpty, "stop removes session")
+}
+
+func test_stop_onlyRemovesMatchingSession() {
+    var tracker = SessionTracker()
+    tracker.start("session-1")
+    tracker.start("session-2")
+    tracker.stop("session-1")
+    t.check(!tracker.isEmpty, "stop only removes matching session")
+}
+
+func test_purgeExpired_removesSessionsOlderThanTimeout() {
+    var tracker = SessionTracker(timeout: 600)
+    let start = Date(timeIntervalSince1970: 0)
+    tracker.start("stale-session", now: start)
+    tracker.purgeExpired(now: start.addingTimeInterval(601))
+    t.check(tracker.isEmpty, "purgeExpired removes sessions older than timeout")
+}
+
+func test_purgeExpired_keepsSessionsWithinTimeout() {
+    var tracker = SessionTracker(timeout: 600)
+    let start = Date(timeIntervalSince1970: 0)
+    tracker.start("fresh-session", now: start)
+    tracker.purgeExpired(now: start.addingTimeInterval(300))
+    t.check(!tracker.isEmpty, "purgeExpired keeps sessions within timeout")
+}
+
+test_newTracker_isEmpty()
+test_start_makesTrackerNonEmpty()
+test_stop_removesSession()
+test_stop_onlyRemovesMatchingSession()
+test_purgeExpired_removesSessionsOlderThanTimeout()
+test_purgeExpired_keepsSessionsWithinTimeout()
+
+t.finish()
+```
+
+- [ ] **Step 4: Run tests to verify they fail**
+
+Run: `swift run SessionTrackerTests`
 Expected: FAIL to compile — `SessionTracker` doesn't exist yet.
 
-- [ ] **Step 4: Implement `SessionTracker`**
+- [ ] **Step 5: Implement `SessionTracker`**
 
 Create `Sources/ThinkingCapsCore/SessionTracker.swift`:
 
@@ -262,16 +306,16 @@ public struct SessionTracker {
 }
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [ ] **Step 6: Run tests to verify they pass**
 
-Run: `swift test --filter SessionTrackerTests`
-Expected: PASS (6 tests)
+Run: `swift run SessionTrackerTests`
+Expected: prints six `PASS:` lines, then `6/6 passed`, exit code 0.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add Package.swift Sources/ThinkingCapsCore/SessionTracker.swift Tests/ThinkingCapsCoreTests/SessionTrackerTests.swift
-git commit -m "Add SessionTracker with expiry"
+git add Package.swift Sources/MiniTest/MiniTest.swift Sources/ThinkingCapsCore/SessionTracker.swift Sources/SessionTrackerTests/main.swift
+git commit -m "Add MiniTest helper and SessionTracker with expiry"
 ```
 
 ---
@@ -279,85 +323,123 @@ git commit -m "Add SessionTracker with expiry"
 ### Task 3: CapsLockLEDDevice protocol + Blinker + IOKitCapsLockLEDDevice
 
 **Files:**
+- Modify: `Package.swift`
 - Create: `Sources/ThinkingCapsCore/CapsLockLEDDevice.swift`
 - Create: `Sources/ThinkingCapsCore/Blinker.swift`
-- Test: `Tests/ThinkingCapsCoreTests/BlinkerTests.swift`
+- Create: `Sources/ThinkingCapsTestSupport/FakeCapsLockLEDDevice.swift`
+- Test: `Sources/BlinkerTests/main.swift`
 
 **Interfaces:**
-- Consumes: the IOKit HID pattern validated in Task 1's `LEDSpike`.
+- Consumes: the IOKit HID pattern validated in Task 1's `LEDSpike`. Consumes `MiniTest` (Task 2).
 - Produces: `public protocol CapsLockLEDDevice { func setLEDOn(_ on: Bool); func realCapsLockIsOn() -> Bool }`; `public final class IOKitCapsLockLEDDevice: CapsLockLEDDevice` with `public init()`; `public final class Blinker` with `init(device: CapsLockLEDDevice, interval: TimeInterval = 0.45, queue: DispatchQueue = DispatchQueue(label: "com.thinkingcaps.blinker"))`, `var isRunning: Bool`, `func start()`, `func stop()`. Used by Task 4 (`HookSocketServer`) and Task 9 (`AppDelegate`).
+- Produces: `public final class FakeCapsLockLEDDevice: CapsLockLEDDevice` (in the new `ThinkingCapsTestSupport` target) with `public init()`, `public private(set) var calls: [Bool]`, `public var realStateToReturn: Bool`. This is a shared test double — Task 4's `HookSocketServerTests` also imports `ThinkingCapsTestSupport` and reuses it; do not redefine it there.
 
-- [ ] **Step 1: Write the failing tests**
-
-Create `Tests/ThinkingCapsCoreTests/BlinkerTests.swift`:
+- [ ] **Step 1: Expand `Package.swift` to add `ThinkingCapsTestSupport` and the `BlinkerTests` executable**
 
 ```swift
-import XCTest
-@testable import ThinkingCapsCore
+// swift-tools-version:5.9
+import PackageDescription
 
-final class FakeCapsLockLEDDevice: CapsLockLEDDevice {
-    private(set) var calls: [Bool] = []
-    var realStateToReturn = false
+let package = Package(
+    name: "ThinkingCaps",
+    platforms: [.macOS(.v13)],
+    targets: [
+        .executableTarget(name: "LEDSpike"),
+        .target(name: "MiniTest"),
+        .target(name: "ThinkingCapsCore"),
+        .executableTarget(name: "SessionTrackerTests", dependencies: ["ThinkingCapsCore", "MiniTest"]),
+        .target(name: "ThinkingCapsTestSupport", dependencies: ["ThinkingCapsCore"]),
+        .executableTarget(name: "BlinkerTests", dependencies: ["ThinkingCapsCore", "ThinkingCapsTestSupport", "MiniTest"]),
+    ]
+)
+```
 
-    func setLEDOn(_ on: Bool) {
+- [ ] **Step 2: Write the shared fake LED device**
+
+Create `Sources/ThinkingCapsTestSupport/FakeCapsLockLEDDevice.swift`:
+
+```swift
+import ThinkingCapsCore
+
+public final class FakeCapsLockLEDDevice: CapsLockLEDDevice {
+    public private(set) var calls: [Bool] = []
+    public var realStateToReturn = false
+
+    public init() {}
+
+    public func setLEDOn(_ on: Bool) {
         calls.append(on)
     }
 
-    func realCapsLockIsOn() -> Bool {
+    public func realCapsLockIsOn() -> Bool {
         realStateToReturn
-    }
-}
-
-final class BlinkerTests: XCTestCase {
-    func test_start_beginsTogglingLED() {
-        let device = FakeCapsLockLEDDevice()
-        let blinker = Blinker(device: device, interval: 0.02)
-        blinker.start()
-        let expectation = XCTestExpectation(description: "wait for toggles")
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.15) {
-            expectation.fulfill()
-        }
-        wait(for: [expectation], timeout: 1.0)
-        blinker.stop()
-        XCTAssertGreaterThanOrEqual(device.calls.count, 2)
-    }
-
-    func test_stop_setsLEDToRealCapsLockState() {
-        let device = FakeCapsLockLEDDevice()
-        device.realStateToReturn = true
-        let blinker = Blinker(device: device, interval: 0.02)
-        blinker.start()
-        blinker.stop()
-        XCTAssertEqual(device.calls.last, true)
-    }
-
-    func test_isRunning_reflectsState() {
-        let device = FakeCapsLockLEDDevice()
-        let blinker = Blinker(device: device, interval: 0.02)
-        XCTAssertFalse(blinker.isRunning)
-        blinker.start()
-        XCTAssertTrue(blinker.isRunning)
-        blinker.stop()
-        XCTAssertFalse(blinker.isRunning)
-    }
-
-    func test_start_isIdempotent() {
-        let device = FakeCapsLockLEDDevice()
-        let blinker = Blinker(device: device, interval: 0.02)
-        blinker.start()
-        blinker.start()
-        XCTAssertTrue(blinker.isRunning)
-        blinker.stop()
     }
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **Step 3: Write the failing tests**
 
-Run: `swift test --filter BlinkerTests`
+Create `Sources/BlinkerTests/main.swift`:
+
+```swift
+import Foundation
+import MiniTest
+import ThinkingCapsCore
+import ThinkingCapsTestSupport
+
+let t = MiniTest()
+
+func test_start_beginsTogglingLED() {
+    let device = FakeCapsLockLEDDevice()
+    let blinker = Blinker(device: device, interval: 0.02)
+    blinker.start()
+    Thread.sleep(forTimeInterval: 0.15)
+    blinker.stop()
+    t.check(device.calls.count >= 2, "start begins toggling LED")
+}
+
+func test_stop_setsLEDToRealCapsLockState() {
+    let device = FakeCapsLockLEDDevice()
+    device.realStateToReturn = true
+    let blinker = Blinker(device: device, interval: 0.02)
+    blinker.start()
+    blinker.stop()
+    t.check(device.calls.last == true, "stop sets LED to real CapsLock state")
+}
+
+func test_isRunning_reflectsState() {
+    let device = FakeCapsLockLEDDevice()
+    let blinker = Blinker(device: device, interval: 0.02)
+    t.check(!blinker.isRunning, "not running before start")
+    blinker.start()
+    t.check(blinker.isRunning, "running after start")
+    blinker.stop()
+    t.check(!blinker.isRunning, "not running after stop")
+}
+
+func test_start_isIdempotent() {
+    let device = FakeCapsLockLEDDevice()
+    let blinker = Blinker(device: device, interval: 0.02)
+    blinker.start()
+    blinker.start()
+    t.check(blinker.isRunning, "still running after double start")
+    blinker.stop()
+}
+
+test_start_beginsTogglingLED()
+test_stop_setsLEDToRealCapsLockState()
+test_isRunning_reflectsState()
+test_start_isIdempotent()
+
+t.finish()
+```
+
+- [ ] **Step 4: Run tests to verify they fail**
+
+Run: `swift run BlinkerTests`
 Expected: FAIL to compile — `CapsLockLEDDevice` and `Blinker` don't exist yet.
 
-- [ ] **Step 3: Implement the protocol and the real IOKit-backed device**
+- [ ] **Step 5: Implement the protocol and the real IOKit-backed device**
 
 Create `Sources/ThinkingCapsCore/CapsLockLEDDevice.swift`:
 
@@ -407,10 +489,8 @@ public final class IOKitCapsLockLEDDevice: CapsLockLEDDevice {
     }
 
     public func setLEDOn(_ on: Bool) {
-        guard let device, let element,
-              let value = IOHIDValueCreateWithIntegerValue(kCFAllocatorDefault, element, on ? 1 : 0) else {
-            return
-        }
+        guard let device, let element else { return }
+        let value = IOHIDValueCreateWithIntegerValue(kCFAllocatorDefault, element, 0, on ? 1 : 0)
         IOHIDDeviceSetValue(device, element, value)
     }
 
@@ -426,7 +506,9 @@ public final class IOKitCapsLockLEDDevice: CapsLockLEDDevice {
 }
 ```
 
-- [ ] **Step 4: Implement `Blinker`**
+**Note:** `IOHIDManagerOpen` above discards its return value, same as the very first version of Task 1's `LEDSpike` did before its fix round. This is deliberate here, not a repeat of that bug: `IOKitCapsLockLEDDevice` fails silently (no element found → `setLEDOn`/`realCapsLockIsOn` become no-ops) if Input Monitoring permission isn't granted, which is exactly the safe, non-crashing degradation this class needs in production — there's no user to print a diagnostic message to. The README (Task 12) documents the permission requirement instead.
+
+- [ ] **Step 6: Implement `Blinker`**
 
 Create `Sources/ThinkingCapsCore/Blinker.swift`:
 
@@ -469,15 +551,15 @@ public final class Blinker {
 }
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [ ] **Step 7: Run tests to verify they pass**
 
-Run: `swift test --filter BlinkerTests`
-Expected: PASS (4 tests)
+Run: `swift run BlinkerTests`
+Expected: prints four `PASS:` lines, then `4/4 passed`, exit code 0.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add Sources/ThinkingCapsCore/CapsLockLEDDevice.swift Sources/ThinkingCapsCore/Blinker.swift Tests/ThinkingCapsCoreTests/BlinkerTests.swift
+git add Package.swift Sources/ThinkingCapsCore/CapsLockLEDDevice.swift Sources/ThinkingCapsCore/Blinker.swift Sources/ThinkingCapsTestSupport/FakeCapsLockLEDDevice.swift Sources/BlinkerTests/main.swift
 git commit -m "Add CapsLockLEDDevice protocol, IOKit implementation, and Blinker"
 ```
 
@@ -486,100 +568,138 @@ git commit -m "Add CapsLockLEDDevice protocol, IOKit implementation, and Blinker
 ### Task 4: HookSocketServer
 
 **Files:**
+- Modify: `Package.swift`
 - Create: `Sources/ThinkingCapsCore/HookSocketServer.swift`
-- Test: `Tests/ThinkingCapsCoreTests/HookSocketServerTests.swift`
+- Test: `Sources/HookSocketServerTests/main.swift`
 
 **Interfaces:**
-- Consumes: `SessionTracker` (Task 2), `Blinker` (Task 3) — exact signatures as produced there. Also reuses the `FakeCapsLockLEDDevice` test helper class already defined in `Tests/ThinkingCapsCoreTests/BlinkerTests.swift` (Task 3) — do not redefine it, it's visible automatically since both files compile into the same `ThinkingCapsCoreTests` target.
-- Produces: `public final class HookSocketServer` with `init(socketPath: String, blinker: Blinker)`, `func start() throws`, `func stop()`, `func setEnabled(_ enabled: Bool)`, `var isBlinking: Bool { get }`. Internal (module-visible, not `public`) `enum Message: Equatable { case start(String); case stop(String) }`, `static func parse(_ line: String) -> Message?`, `func handle(_ message: Message)` — used directly by this task's tests and internally by Task 9's wiring only through the public API. Used by Task 8 (`StatusItemController`) and Task 9 (`AppDelegate`).
+- Consumes: `SessionTracker` (Task 2), `Blinker` (Task 3) — exact signatures as produced there. Also reuses `FakeCapsLockLEDDevice` from the `ThinkingCapsTestSupport` target (Task 3) — do not redefine it, just `import ThinkingCapsTestSupport`.
+- Produces: `public final class HookSocketServer` with `init(socketPath: String, blinker: Blinker)`, `func start() throws`, `func stop()`, `func setEnabled(_ enabled: Bool)`, `var isBlinking: Bool { get }`. `public enum Message: Equatable { case start(String); case stop(String) }`, `public static func parse(_ line: String) -> Message?`, `public func handle(_ message: Message)` — these three are `public` (not merely internal) specifically because there's no `@testable import` available in this project (see Global Constraints); the test executable calls them directly via a normal `import ThinkingCapsCore`. Used by Task 8 (`StatusItemController`) and Task 9 (`AppDelegate`).
 
-- [ ] **Step 1: Write the failing tests**
-
-Create `Tests/ThinkingCapsCoreTests/HookSocketServerTests.swift`:
+- [ ] **Step 1: Expand `Package.swift` to add the `HookSocketServerTests` executable**
 
 ```swift
-import XCTest
-@testable import ThinkingCapsCore
+// swift-tools-version:5.9
+import PackageDescription
 
-final class HookSocketServerTests: XCTestCase {
-    private func makeServer(interval: TimeInterval = 0.02) -> (HookSocketServer, String) {
-        let device = FakeCapsLockLEDDevice()
-        let blinker = Blinker(device: device, interval: interval)
-        let socketPath = NSTemporaryDirectory() + UUID().uuidString + ".sock"
-        let server = HookSocketServer(socketPath: socketPath, blinker: blinker)
-        return (server, socketPath)
-    }
-
-    func test_startMessage_startsBlinkerWhenFirstSession() {
-        let (server, _) = makeServer()
-        server.setEnabled(true)
-        server.handle(.start("session-1"))
-        XCTAssertTrue(server.isBlinking)
-    }
-
-    func test_stopMessage_stopsBlinkerWhenLastSessionEnds() {
-        let (server, _) = makeServer()
-        server.setEnabled(true)
-        server.handle(.start("session-1"))
-        server.handle(.stop("session-1"))
-        XCTAssertFalse(server.isBlinking)
-    }
-
-    func test_secondSessionKeepsBlinkingAfterFirstStops() {
-        let (server, _) = makeServer()
-        server.setEnabled(true)
-        server.handle(.start("session-1"))
-        server.handle(.start("session-2"))
-        server.handle(.stop("session-1"))
-        XCTAssertTrue(server.isBlinking)
-    }
-
-    func test_disabled_ignoresMessages() {
-        let (server, _) = makeServer()
-        server.setEnabled(false)
-        server.handle(.start("session-1"))
-        XCTAssertFalse(server.isBlinking)
-    }
-
-    func test_parse_recognizesStartAndStop() {
-        XCTAssertEqual(HookSocketServer.parse("start abc"), .start("abc"))
-        XCTAssertEqual(HookSocketServer.parse("stop abc"), .stop("abc"))
-        XCTAssertNil(HookSocketServer.parse("garbage"))
-    }
-
-    func test_realSocket_deliversStartMessageFromExternalProcess() throws {
-        let (server, socketPath) = makeServer()
-        server.setEnabled(true)
-        try server.start()
-        defer { server.stop() }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/nc")
-        process.arguments = ["-U", "-w", "1", socketPath]
-        let input = Pipe()
-        process.standardInput = input
-        try process.run()
-        input.fileHandleForWriting.write("start session-1\n".data(using: .utf8)!)
-        input.fileHandleForWriting.closeFile()
-        process.waitUntilExit()
-
-        let expectation = XCTestExpectation(description: "message processed")
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) {
-            expectation.fulfill()
-        }
-        wait(for: [expectation], timeout: 2.0)
-
-        XCTAssertTrue(server.isBlinking)
-    }
-}
+let package = Package(
+    name: "ThinkingCaps",
+    platforms: [.macOS(.v13)],
+    targets: [
+        .executableTarget(name: "LEDSpike"),
+        .target(name: "MiniTest"),
+        .target(name: "ThinkingCapsCore"),
+        .executableTarget(name: "SessionTrackerTests", dependencies: ["ThinkingCapsCore", "MiniTest"]),
+        .target(name: "ThinkingCapsTestSupport", dependencies: ["ThinkingCapsCore"]),
+        .executableTarget(name: "BlinkerTests", dependencies: ["ThinkingCapsCore", "ThinkingCapsTestSupport", "MiniTest"]),
+        .executableTarget(name: "HookSocketServerTests", dependencies: ["ThinkingCapsCore", "ThinkingCapsTestSupport", "MiniTest"]),
+    ]
+)
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **Step 2: Write the failing tests**
 
-Run: `swift test --filter HookSocketServerTests`
+Create `Sources/HookSocketServerTests/main.swift`:
+
+```swift
+import Foundation
+import MiniTest
+import ThinkingCapsCore
+import ThinkingCapsTestSupport
+
+let t = MiniTest()
+
+func makeServer(interval: TimeInterval = 0.02) -> (HookSocketServer, String) {
+    let device = FakeCapsLockLEDDevice()
+    let blinker = Blinker(device: device, interval: interval)
+    let socketPath = NSTemporaryDirectory() + UUID().uuidString + ".sock"
+    let server = HookSocketServer(socketPath: socketPath, blinker: blinker)
+    return (server, socketPath)
+}
+
+func test_startMessage_startsBlinkerWhenFirstSession() {
+    let (server, _) = makeServer()
+    server.setEnabled(true)
+    server.handle(.start("session-1"))
+    t.check(server.isBlinking, "start message starts blinker when first session")
+}
+
+func test_stopMessage_stopsBlinkerWhenLastSessionEnds() {
+    let (server, _) = makeServer()
+    server.setEnabled(true)
+    server.handle(.start("session-1"))
+    server.handle(.stop("session-1"))
+    t.check(!server.isBlinking, "stop message stops blinker when last session ends")
+}
+
+func test_secondSessionKeepsBlinkingAfterFirstStops() {
+    let (server, _) = makeServer()
+    server.setEnabled(true)
+    server.handle(.start("session-1"))
+    server.handle(.start("session-2"))
+    server.handle(.stop("session-1"))
+    t.check(server.isBlinking, "second session keeps blinking after first stops")
+}
+
+func test_disabled_ignoresMessages() {
+    let (server, _) = makeServer()
+    server.setEnabled(false)
+    server.handle(.start("session-1"))
+    t.check(!server.isBlinking, "disabled server ignores messages")
+}
+
+func test_parse_recognizesStartAndStop() {
+    t.check(HookSocketServer.parse("start abc") == .start("abc"), "parse recognizes start")
+    t.check(HookSocketServer.parse("stop abc") == .stop("abc"), "parse recognizes stop")
+    t.check(HookSocketServer.parse("garbage") == nil, "parse rejects garbage")
+}
+
+func test_realSocket_deliversStartMessageFromExternalProcess() {
+    let (server, socketPath) = makeServer()
+    server.setEnabled(true)
+    do {
+        try server.start()
+    } catch {
+        t.check(false, "server.start() threw: \(error)")
+        return
+    }
+    defer { server.stop() }
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/nc")
+    process.arguments = ["-U", "-w", "1", socketPath]
+    let input = Pipe()
+    process.standardInput = input
+    do {
+        try process.run()
+    } catch {
+        t.check(false, "failed to launch nc: \(error)")
+        return
+    }
+    input.fileHandleForWriting.write("start session-1\n".data(using: .utf8)!)
+    input.fileHandleForWriting.closeFile()
+    process.waitUntilExit()
+
+    Thread.sleep(forTimeInterval: 0.2)
+    t.check(server.isBlinking, "real socket delivers start message from external process")
+}
+
+test_startMessage_startsBlinkerWhenFirstSession()
+test_stopMessage_stopsBlinkerWhenLastSessionEnds()
+test_secondSessionKeepsBlinkingAfterFirstStops()
+test_disabled_ignoresMessages()
+test_parse_recognizesStartAndStop()
+test_realSocket_deliversStartMessageFromExternalProcess()
+
+t.finish()
+```
+
+- [ ] **Step 3: Run tests to verify they fail**
+
+Run: `swift run HookSocketServerTests`
 Expected: FAIL to compile — `HookSocketServer` doesn't exist yet.
 
-- [ ] **Step 3: Implement `HookSocketServer`**
+- [ ] **Step 4: Implement `HookSocketServer`**
 
 Create `Sources/ThinkingCapsCore/HookSocketServer.swift`:
 
@@ -590,7 +710,7 @@ import Darwin
 #endif
 
 public final class HookSocketServer {
-    enum Message: Equatable {
+    public enum Message: Equatable {
         case start(String)
         case stop(String)
     }
@@ -681,7 +801,7 @@ public final class HookSocketServer {
         }
     }
 
-    func handle(_ message: Message) {
+    public func handle(_ message: Message) {
         stateQueue.sync {
             guard self.isEnabled else { return }
             switch message {
@@ -734,7 +854,7 @@ public final class HookSocketServer {
         }
     }
 
-    static func parse(_ line: String) -> Message? {
+    public static func parse(_ line: String) -> Message? {
         let parts = line.trimmingCharacters(in: .whitespaces).split(separator: " ", maxSplits: 1)
         guard parts.count == 2 else { return nil }
         let id = String(parts[1])
@@ -747,15 +867,15 @@ public final class HookSocketServer {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 5: Run tests to verify they pass**
 
-Run: `swift test --filter HookSocketServerTests`
-Expected: PASS (6 tests)
+Run: `swift run HookSocketServerTests`
+Expected: prints six `PASS:` lines, then `6/6 passed`, exit code 0.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add Sources/ThinkingCapsCore/HookSocketServer.swift Tests/ThinkingCapsCoreTests/HookSocketServerTests.swift
+git add Package.swift Sources/ThinkingCapsCore/HookSocketServer.swift Sources/HookSocketServerTests/main.swift
 git commit -m "Add HookSocketServer with session tracking and blink orchestration"
 ```
 
@@ -764,60 +884,88 @@ git commit -m "Add HookSocketServer with session tracking and blink orchestratio
 ### Task 5: ClaudeHookInstaller
 
 **Files:**
+- Modify: `Package.swift`
 - Create: `Sources/ThinkingCapsCore/ClaudeHookInstaller.swift`
-- Test: `Tests/ThinkingCapsCoreTests/ClaudeHookInstallerTests.swift`
+- Test: `Sources/ClaudeHookInstallerTests/main.swift`
 
 **Interfaces:**
 - Produces: `public struct ClaudeHookInstaller { public let settingsURL: URL; public init(settingsURL: URL); public func install(notifierPath: String) throws }`. Used by Task 9 (`AppDelegate`).
 
-- [ ] **Step 1: Write the failing tests**
-
-Create `Tests/ThinkingCapsCoreTests/ClaudeHookInstallerTests.swift`:
+- [ ] **Step 1: Expand `Package.swift` to add the `ClaudeHookInstallerTests` executable**
 
 ```swift
-import XCTest
-@testable import ThinkingCapsCore
+// swift-tools-version:5.9
+import PackageDescription
 
-final class ClaudeHookInstallerTests: XCTestCase {
-    private var tempURL: URL!
+let package = Package(
+    name: "ThinkingCaps",
+    platforms: [.macOS(.v13)],
+    targets: [
+        .executableTarget(name: "LEDSpike"),
+        .target(name: "MiniTest"),
+        .target(name: "ThinkingCapsCore"),
+        .executableTarget(name: "SessionTrackerTests", dependencies: ["ThinkingCapsCore", "MiniTest"]),
+        .target(name: "ThinkingCapsTestSupport", dependencies: ["ThinkingCapsCore"]),
+        .executableTarget(name: "BlinkerTests", dependencies: ["ThinkingCapsCore", "ThinkingCapsTestSupport", "MiniTest"]),
+        .executableTarget(name: "HookSocketServerTests", dependencies: ["ThinkingCapsCore", "ThinkingCapsTestSupport", "MiniTest"]),
+        .executableTarget(name: "ClaudeHookInstallerTests", dependencies: ["ThinkingCapsCore", "MiniTest"]),
+    ]
+)
+```
 
-    override func setUp() {
-        super.setUp()
-        tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
-    }
+- [ ] **Step 2: Write the failing tests**
 
-    override func tearDown() {
-        try? FileManager.default.removeItem(at: tempURL)
-        super.tearDown()
-    }
+Create `Sources/ClaudeHookInstallerTests/main.swift`:
 
-    private func readJSON() throws -> [String: Any] {
-        let data = try Data(contentsOf: tempURL)
-        return try JSONSerialization.jsonObject(with: data) as! [String: Any]
-    }
+```swift
+import Foundation
+import MiniTest
+import ThinkingCapsCore
 
-    func test_install_onMissingFile_createsHooksSection() throws {
+let t = MiniTest()
+
+func withTempSettingsURL(_ body: (URL) -> Void) {
+    let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+    body(tempURL)
+    try? FileManager.default.removeItem(at: tempURL)
+}
+
+func readJSON(_ url: URL) -> [String: Any]? {
+    guard let data = try? Data(contentsOf: url) else { return nil }
+    return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+}
+
+func test_install_onMissingFile_createsHooksSection() {
+    withTempSettingsURL { tempURL in
         let installer = ClaudeHookInstaller(settingsURL: tempURL)
-        try installer.install(notifierPath: "/Applications/ThinkingCaps.app/Contents/MacOS/hook-notify")
-
-        let root = try readJSON()
-        let hooks = root["hooks"] as! [String: Any]
-        XCTAssertNotNil(hooks["UserPromptSubmit"])
-        XCTAssertNotNil(hooks["Stop"])
+        do {
+            try installer.install(notifierPath: "/Applications/ThinkingCaps.app/Contents/MacOS/hook-notify")
+        } catch {
+            t.check(false, "install threw: \(error)")
+            return
+        }
+        let root = readJSON(tempURL)
+        let hooks = root?["hooks"] as? [String: Any]
+        t.check(hooks?["UserPromptSubmit"] != nil, "creates UserPromptSubmit hooks section")
+        t.check(hooks?["Stop"] != nil, "creates Stop hooks section")
     }
+}
 
-    func test_install_isIdempotent() throws {
+func test_install_isIdempotent() {
+    withTempSettingsURL { tempURL in
         let installer = ClaudeHookInstaller(settingsURL: tempURL)
-        try installer.install(notifierPath: "/Applications/ThinkingCaps.app/Contents/MacOS/hook-notify")
-        try installer.install(notifierPath: "/Applications/ThinkingCaps.app/Contents/MacOS/hook-notify")
+        try? installer.install(notifierPath: "/Applications/ThinkingCaps.app/Contents/MacOS/hook-notify")
+        try? installer.install(notifierPath: "/Applications/ThinkingCaps.app/Contents/MacOS/hook-notify")
 
-        let root = try readJSON()
-        let hooks = root["hooks"] as! [String: Any]
-        let userPromptEntries = hooks["UserPromptSubmit"] as! [[String: Any]]
-        XCTAssertEqual(userPromptEntries.count, 1)
+        let root = readJSON(tempURL)
+        let hooks = root?["hooks"] as? [String: Any]
+        let userPromptEntries = hooks?["UserPromptSubmit"] as? [[String: Any]]
+        t.check(userPromptEntries?.count == 1, "install is idempotent (no duplicate entries)")
     }
+}
 
-    func test_install_preservesUnrelatedExistingSettings() throws {
+func test_install_preservesUnrelatedExistingSettings() {
+    withTempSettingsURL { tempURL in
         let existing: [String: Any] = [
             "someOtherSetting": true,
             "hooks": [
@@ -826,27 +974,34 @@ final class ClaudeHookInstallerTests: XCTestCase {
                 ]
             ]
         ]
-        let data = try JSONSerialization.data(withJSONObject: existing)
-        try data.write(to: tempURL)
+        if let data = try? JSONSerialization.data(withJSONObject: existing) {
+            try? data.write(to: tempURL)
+        }
 
         let installer = ClaudeHookInstaller(settingsURL: tempURL)
-        try installer.install(notifierPath: "/Applications/ThinkingCaps.app/Contents/MacOS/hook-notify")
+        try? installer.install(notifierPath: "/Applications/ThinkingCaps.app/Contents/MacOS/hook-notify")
 
-        let root = try readJSON()
-        XCTAssertEqual(root["someOtherSetting"] as? Bool, true)
-        let hooks = root["hooks"] as! [String: Any]
-        XCTAssertNotNil(hooks["PreToolUse"])
-        XCTAssertNotNil(hooks["UserPromptSubmit"])
+        let root = readJSON(tempURL)
+        t.check(root?["someOtherSetting"] as? Bool == true, "preserves unrelated top-level settings")
+        let hooks = root?["hooks"] as? [String: Any]
+        t.check(hooks?["PreToolUse"] != nil, "preserves existing PreToolUse hooks")
+        t.check(hooks?["UserPromptSubmit"] != nil, "adds UserPromptSubmit hooks")
     }
 }
+
+test_install_onMissingFile_createsHooksSection()
+test_install_isIdempotent()
+test_install_preservesUnrelatedExistingSettings()
+
+t.finish()
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **Step 3: Run tests to verify they fail**
 
-Run: `swift test --filter ClaudeHookInstallerTests`
+Run: `swift run ClaudeHookInstallerTests`
 Expected: FAIL to compile — `ClaudeHookInstaller` doesn't exist yet.
 
-- [ ] **Step 3: Implement `ClaudeHookInstaller`**
+- [ ] **Step 4: Implement `ClaudeHookInstaller`**
 
 Create `Sources/ThinkingCapsCore/ClaudeHookInstaller.swift`:
 
@@ -917,15 +1072,15 @@ public struct ClaudeHookInstaller {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 5: Run tests to verify they pass**
 
-Run: `swift test --filter ClaudeHookInstallerTests`
-Expected: PASS (3 tests)
+Run: `swift run ClaudeHookInstallerTests`
+Expected: prints six `PASS:` lines, then `6/6 passed`, exit code 0.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add Sources/ThinkingCapsCore/ClaudeHookInstaller.swift Tests/ThinkingCapsCoreTests/ClaudeHookInstallerTests.swift
+git add Package.swift Sources/ThinkingCapsCore/ClaudeHookInstaller.swift Sources/ClaudeHookInstallerTests/main.swift
 git commit -m "Add ClaudeHookInstaller with idempotent JSON merge"
 ```
 
@@ -940,7 +1095,7 @@ This is the small compiled program the Claude Code hooks actually invoke. It rea
 - Create: `Sources/HookNotifyCore/PayloadParsing.swift`
 - Create: `Sources/HookNotifyCore/SocketSender.swift`
 - Create: `Sources/HookNotify/main.swift`
-- Test: `Tests/HookNotifyCoreTests/PayloadParsingTests.swift`
+- Test: `Sources/PayloadParsingTests/main.swift`
 
 **Interfaces:**
 - Produces: `public enum HookPayload { public static func extractSessionID(from data: Data) -> String? }`; `public enum SocketSender { @discardableResult public static func send(_ message: String, toUnixSocketPath path: String) -> Bool }`. Not consumed by other Swift code — invoked as a subprocess by the Claude Code hook command that Task 5's `ClaudeHookInstaller` writes, and must write to the same socket path Task 9's `AppDelegate` gives to `HookSocketServer`.
@@ -956,46 +1111,58 @@ let package = Package(
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(name: "LEDSpike"),
+        .target(name: "MiniTest"),
         .target(name: "ThinkingCapsCore"),
-        .testTarget(name: "ThinkingCapsCoreTests", dependencies: ["ThinkingCapsCore"]),
+        .executableTarget(name: "SessionTrackerTests", dependencies: ["ThinkingCapsCore", "MiniTest"]),
+        .target(name: "ThinkingCapsTestSupport", dependencies: ["ThinkingCapsCore"]),
+        .executableTarget(name: "BlinkerTests", dependencies: ["ThinkingCapsCore", "ThinkingCapsTestSupport", "MiniTest"]),
+        .executableTarget(name: "HookSocketServerTests", dependencies: ["ThinkingCapsCore", "ThinkingCapsTestSupport", "MiniTest"]),
+        .executableTarget(name: "ClaudeHookInstallerTests", dependencies: ["ThinkingCapsCore", "MiniTest"]),
         .target(name: "HookNotifyCore"),
         .executableTarget(name: "HookNotify", dependencies: ["HookNotifyCore"]),
-        .testTarget(name: "HookNotifyCoreTests", dependencies: ["HookNotifyCore"]),
+        .executableTarget(name: "PayloadParsingTests", dependencies: ["HookNotifyCore", "MiniTest"]),
     ]
 )
 ```
 
 - [ ] **Step 2: Write the failing tests**
 
-Create `Tests/HookNotifyCoreTests/PayloadParsingTests.swift`:
+Create `Sources/PayloadParsingTests/main.swift`:
 
 ```swift
-import XCTest
-@testable import HookNotifyCore
+import Foundation
+import MiniTest
+import HookNotifyCore
 
-final class PayloadParsingTests: XCTestCase {
-    func test_extractSessionID_fromValidPayload() {
-        let json = #"{"session_id": "abc-123", "other_field": true}"#
-        let data = json.data(using: .utf8)!
-        XCTAssertEqual(HookPayload.extractSessionID(from: data), "abc-123")
-    }
+let t = MiniTest()
 
-    func test_extractSessionID_returnsNilForMissingField() {
-        let json = #"{"other_field": true}"#
-        let data = json.data(using: .utf8)!
-        XCTAssertNil(HookPayload.extractSessionID(from: data))
-    }
-
-    func test_extractSessionID_returnsNilForInvalidJSON() {
-        let data = "not json".data(using: .utf8)!
-        XCTAssertNil(HookPayload.extractSessionID(from: data))
-    }
+func test_extractSessionID_fromValidPayload() {
+    let json = #"{"session_id": "abc-123", "other_field": true}"#
+    let data = json.data(using: .utf8)!
+    t.check(HookPayload.extractSessionID(from: data) == "abc-123", "extracts session_id from valid payload")
 }
+
+func test_extractSessionID_returnsNilForMissingField() {
+    let json = #"{"other_field": true}"#
+    let data = json.data(using: .utf8)!
+    t.check(HookPayload.extractSessionID(from: data) == nil, "returns nil for missing field")
+}
+
+func test_extractSessionID_returnsNilForInvalidJSON() {
+    let data = "not json".data(using: .utf8)!
+    t.check(HookPayload.extractSessionID(from: data) == nil, "returns nil for invalid JSON")
+}
+
+test_extractSessionID_fromValidPayload()
+test_extractSessionID_returnsNilForMissingField()
+test_extractSessionID_returnsNilForInvalidJSON()
+
+t.finish()
 ```
 
 - [ ] **Step 3: Run tests to verify they fail**
 
-Run: `swift test --filter PayloadParsingTests`
+Run: `swift run PayloadParsingTests`
 Expected: FAIL to compile — `HookPayload` doesn't exist yet.
 
 - [ ] **Step 4: Implement `PayloadParsing` and `SocketSender`**
@@ -1058,8 +1225,8 @@ public enum SocketSender {
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `swift test --filter PayloadParsingTests`
-Expected: PASS (3 tests)
+Run: `swift run PayloadParsingTests`
+Expected: prints three `PASS:` lines, then `3/3 passed`, exit code 0.
 
 - [ ] **Step 6: Write the executable entry point**
 
@@ -1101,7 +1268,7 @@ Expected: the `nc -lU` terminal prints `start manual-test-1`, and the `HookNotif
 - [ ] **Step 8: Commit**
 
 ```bash
-git add Package.swift Sources/HookNotifyCore Sources/HookNotify Tests/HookNotifyCoreTests
+git add Package.swift Sources/HookNotifyCore Sources/HookNotify Sources/PayloadParsingTests
 git commit -m "Add HookNotify helper binary"
 ```
 
@@ -1296,11 +1463,16 @@ let package = Package(
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(name: "LEDSpike"),
+        .target(name: "MiniTest"),
         .target(name: "ThinkingCapsCore"),
-        .testTarget(name: "ThinkingCapsCoreTests", dependencies: ["ThinkingCapsCore"]),
+        .executableTarget(name: "SessionTrackerTests", dependencies: ["ThinkingCapsCore", "MiniTest"]),
+        .target(name: "ThinkingCapsTestSupport", dependencies: ["ThinkingCapsCore"]),
+        .executableTarget(name: "BlinkerTests", dependencies: ["ThinkingCapsCore", "ThinkingCapsTestSupport", "MiniTest"]),
+        .executableTarget(name: "HookSocketServerTests", dependencies: ["ThinkingCapsCore", "ThinkingCapsTestSupport", "MiniTest"]),
+        .executableTarget(name: "ClaudeHookInstallerTests", dependencies: ["ThinkingCapsCore", "MiniTest"]),
         .target(name: "HookNotifyCore"),
         .executableTarget(name: "HookNotify", dependencies: ["HookNotifyCore"]),
-        .testTarget(name: "HookNotifyCoreTests", dependencies: ["HookNotifyCore"]),
+        .executableTarget(name: "PayloadParsingTests", dependencies: ["HookNotifyCore", "MiniTest"]),
         .executableTarget(name: "ThinkingCaps", dependencies: ["ThinkingCapsCore"]),
     ]
 )
@@ -1386,8 +1558,8 @@ app.run()
 
 - [ ] **Step 4: Run the full test suite**
 
-Run: `swift test`
-Expected: PASS (all tests from Tasks 2, 3, 4, 5, 6 — 16 tests total)
+Run: `swift run SessionTrackerTests && swift run BlinkerTests && swift run HookSocketServerTests && swift run ClaudeHookInstallerTests && swift run PayloadParsingTests`
+Expected: each prints its own `N/N passed` line and exits 0; the `&&` chain only completes if every one of them passes (6 + 4 + 6 + 6 + 3 = 25 checks total across Tasks 2, 3, 4, 5, 6).
 
 - [ ] **Step 5: Manually run the app and verify the UI**
 
