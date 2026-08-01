@@ -1,6 +1,7 @@
 import Foundation
 import IOKit
 import IOKit.hid
+import CoreGraphics
 
 public protocol CapsLockLEDDevice {
     func setLEDOn(_ on: Bool)
@@ -8,11 +9,21 @@ public protocol CapsLockLEDDevice {
 }
 
 public final class IOKitCapsLockLEDDevice: CapsLockLEDDevice {
+    // Must be retained for as long as `device`/`element` are used: releasing it closes the HID
+    // connections it opened (via its deinit calling IOHIDManagerClose below), which silently
+    // makes every later IOHIDDeviceSetValue call fail with kIOReturnNotOpen.
+    private var manager: IOHIDManager?
     private var device: IOHIDDevice?
     private var element: IOHIDElement?
 
     public init() {
         locateCapsLockElement()
+    }
+
+    deinit {
+        if let manager {
+            IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+        }
     }
 
     private func locateCapsLockElement() {
@@ -37,6 +48,7 @@ public final class IOKitCapsLockLEDDevice: CapsLockLEDDevice {
             if let capsElement = elements.first(where: {
                 IOHIDElementGetUsagePage($0) == kHIDPage_LEDs && IOHIDElementGetUsage($0) == kHIDUsage_LED_CapsLock
             }) {
+                self.manager = manager
                 device = candidate
                 element = capsElement
                 return
@@ -51,13 +63,6 @@ public final class IOKitCapsLockLEDDevice: CapsLockLEDDevice {
     }
 
     public func realCapsLockIsOn() -> Bool {
-        guard let device, let element else { return false }
-        let valuePointer = UnsafeMutablePointer<Unmanaged<IOHIDValue>>.allocate(capacity: 1)
-        defer { valuePointer.deallocate() }
-        guard IOHIDDeviceGetValue(device, element, valuePointer) == kIOReturnSuccess else {
-            return false
-        }
-        let value = valuePointer.pointee.takeUnretainedValue()
-        return IOHIDValueGetIntegerValue(value) != 0
+        CGEventSource.flagsState(.hidSystemState).contains(.maskAlphaShift)
     }
 }

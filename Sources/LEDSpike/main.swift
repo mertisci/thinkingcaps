@@ -2,9 +2,14 @@ import Foundation
 import IOKit
 import IOKit.hid
 
-func findKeyboardDevices() -> [IOHIDDevice] {
+// Returns the manager alongside its devices, and the caller must keep that manager alive for as
+// long as it uses those devices: IOHIDManagerCreate/Open opens HID connections that are tied to
+// the manager's lifetime. If the manager is deallocated (e.g. it was only a local variable that
+// went out of scope), its deinit closes those connections and every later IOHIDDeviceSetValue
+// call on the devices it returned silently fails with kIOReturnNotOpen.
+func findKeyboardDevices() -> (manager: IOHIDManager, devices: [IOHIDDevice])? {
     guard let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone)) as IOHIDManager? else {
-        return []
+        return nil
     }
     let matchingDict: [String: Any] = [
         kIOHIDDeviceUsagePageKey as String: kHIDPage_GenericDesktop,
@@ -15,12 +20,12 @@ func findKeyboardDevices() -> [IOHIDDevice] {
     guard openResult == kIOReturnSuccess else {
         print("IOHIDManagerOpen failed (IOReturn \(openResult)). This usually means Input Monitoring permission hasn't been granted.")
         print("Open System Settings > Privacy & Security > Input Monitoring, enable this program, then run this again.")
-        return []
+        return nil
     }
     guard let deviceSet = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> else {
-        return []
+        return nil
     }
-    return Array(deviceSet)
+    return (manager, Array(deviceSet))
 }
 
 func capsLockLEDElement(on device: IOHIDDevice) -> IOHIDElement? {
@@ -40,7 +45,11 @@ func setCapsLockLED(_ device: IOHIDDevice, element: IOHIDElement, on: Bool) -> B
 }
 
 print("ThinkingCaps LED spike: looking for keyboards with a CapsLock LED...")
-let devices = findKeyboardDevices()
+
+guard let (manager, devices) = findKeyboardDevices() else {
+    print("Found 0 keyboard device(s).")
+    exit(0)
+}
 print("Found \(devices.count) keyboard device(s).")
 
 var found = false
@@ -61,3 +70,7 @@ for device in devices {
 if !found && devices.count > 0 {
     print("No CapsLock LED element found on any matched keyboard device.")
 }
+
+// Keep `manager` referenced (and thus alive via ARC) through the entire blink loop above: see
+// the comment on findKeyboardDevices for why an early dealloc here would break the toggles.
+_ = manager
