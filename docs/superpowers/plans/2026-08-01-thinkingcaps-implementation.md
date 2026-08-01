@@ -496,15 +496,18 @@ public final class IOKitCapsLockLEDDevice: CapsLockLEDDevice {
 
     public func realCapsLockIsOn() -> Bool {
         guard let device, let element else { return false }
-        var valueRef: Unmanaged<IOHIDValue>?
-        guard IOHIDDeviceGetValue(device, element, &valueRef) == kIOReturnSuccess,
-              let value = valueRef?.takeRetainedValue() else {
+        let valuePointer = UnsafeMutablePointer<Unmanaged<IOHIDValue>>.allocate(capacity: 1)
+        defer { valuePointer.deallocate() }
+        guard IOHIDDeviceGetValue(device, element, valuePointer) == kIOReturnSuccess else {
             return false
         }
+        let value = valuePointer.pointee.takeUnretainedValue()
         return IOHIDValueGetIntegerValue(value) != 0
     }
 }
 ```
+
+**Note:** `IOHIDDeviceGetValue`'s third parameter is `IOHIDValueRef _Nonnull * _Nonnull` in the real SDK header — a non-optional pointer to a non-optional `Unmanaged<IOHIDValue>`, not the doubly-optional `Unmanaged<IOHIDValue>?` an earlier draft of this code used (which doesn't compile against that signature). The version above was verified directly against `IOHIDDevice.h` on this machine.
 
 **Note:** `IOHIDManagerOpen` above discards its return value, same as the very first version of Task 1's `LEDSpike` did before its fix round. This is deliberate here, not a repeat of that bug: `IOKitCapsLockLEDDevice` fails silently (no element found → `setLEDOn`/`realCapsLockIsOn` become no-ops) if Input Monitoring permission isn't granted, which is exactly the safe, non-crashing degradation this class needs in production — there's no user to print a diagnostic message to. The README (Task 12) documents the permission requirement instead.
 
@@ -554,7 +557,7 @@ public final class Blinker {
 - [ ] **Step 7: Run tests to verify they pass**
 
 Run: `swift run BlinkerTests`
-Expected: prints four `PASS:` lines, then `4/4 passed`, exit code 0.
+Expected: prints six `PASS:` lines, then `6/6 passed`, exit code 0 (four test functions, six `t.check(...)` calls total — `test_isRunning_reflectsState` alone has three).
 
 - [ ] **Step 8: Commit**
 
@@ -870,7 +873,7 @@ public final class HookSocketServer {
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `swift run HookSocketServerTests`
-Expected: prints six `PASS:` lines, then `6/6 passed`, exit code 0.
+Expected: prints eight `PASS:` lines, then `8/8 passed`, exit code 0 (six test functions; `test_parse_recognizesStartAndStop` alone has three checks).
 
 - [ ] **Step 6: Commit**
 
@@ -1559,7 +1562,7 @@ app.run()
 - [ ] **Step 4: Run the full test suite**
 
 Run: `swift run SessionTrackerTests && swift run BlinkerTests && swift run HookSocketServerTests && swift run ClaudeHookInstallerTests && swift run PayloadParsingTests`
-Expected: each prints its own `N/N passed` line and exits 0; the `&&` chain only completes if every one of them passes (6 + 4 + 6 + 6 + 3 = 25 checks total across Tasks 2, 3, 4, 5, 6).
+Expected: each prints its own `N/N passed` line and exits 0; the `&&` chain only completes if every one of them passes (6 + 6 + 8 + 6 + 3 = 29 checks total across Tasks 2, 3, 4, 5, 6).
 
 - [ ] **Step 5: Manually run the app and verify the UI**
 
