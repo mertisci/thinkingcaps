@@ -11,7 +11,12 @@ func findKeyboardDevices() -> [IOHIDDevice] {
         kIOHIDDeviceUsageKey as String: kHIDUsage_GD_Keyboard
     ]
     IOHIDManagerSetDeviceMatching(manager, matchingDict as CFDictionary)
-    IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+    let openResult = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+    guard openResult == kIOReturnSuccess else {
+        print("IOHIDManagerOpen failed (IOReturn \(openResult)). This usually means Input Monitoring permission hasn't been granted.")
+        print("Open System Settings > Privacy & Security > Input Monitoring, enable this program, then run this again.")
+        return []
+    }
     guard let deviceSet = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> else {
         return []
     }
@@ -42,7 +47,7 @@ var found = false
 for device in devices {
     guard let element = capsLockLEDElement(on: device) else { continue }
     found = true
-    print("Found a CapsLock LED element. Blinking it 6 times (about 5 seconds).")
+    print("Found a CapsLock LED element. Blinking it 6 times (about 3 seconds).")
     print("While this runs: watch the physical CapsLock light. After it ends, press CapsLock once and type a letter to confirm normal typing still works.")
     for i in 0..<6 {
         let on = i % 2 == 0
@@ -53,6 +58,6 @@ for device in devices {
     setCapsLockLED(device, element: element, on: false)
 }
 
-if !found {
-    print("No CapsLock LED element found on any matched keyboard device. This likely means direct LED control isn't available on this Mac — report this back so we can switch to the menu-bar-icon fallback.")
+if !found && devices.count > 0 {
+    print("No CapsLock LED element found on any matched keyboard device.")
 }
