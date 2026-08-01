@@ -38,6 +38,7 @@ public final class HookSocketServer {
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
         guard socketPath.utf8.count < MemoryLayout.size(ofValue: addr.sun_path) else {
+            closeListenFD()
             throw POSIXError(.ENAMETOOLONG)
         }
         withUnsafeMutableBytes(of: &addr.sun_path) { rawBuffer in
@@ -53,11 +54,15 @@ public final class HookSocketServer {
             }
         }
         guard bindResult == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            let bindErrno = errno
+            closeListenFD()
+            throw POSIXError(POSIXErrorCode(rawValue: bindErrno) ?? .EIO)
         }
 
         guard listen(listenFD, 8) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            let listenErrno = errno
+            closeListenFD()
+            throw POSIXError(POSIXErrorCode(rawValue: listenErrno) ?? .EIO)
         }
 
         isRunning = true
@@ -76,13 +81,17 @@ public final class HookSocketServer {
 
     public func stop() {
         isRunning = false
+        closeListenFD()
+        unlink(socketPath)
+        purgeTimer?.cancel()
+        purgeTimer = nil
+    }
+
+    private func closeListenFD() {
         if listenFD >= 0 {
             close(listenFD)
             listenFD = -1
         }
-        unlink(socketPath)
-        purgeTimer?.cancel()
-        purgeTimer = nil
     }
 
     public func setEnabled(_ enabled: Bool) {
