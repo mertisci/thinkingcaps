@@ -1,115 +1,143 @@
-# ThinkingCaps — Tasarım Dokümanı
+# ThinkingCaps — Design Doc
 
-Tarih: 2026-08-01
+Date: 2026-08-01
 
-## Amaç
+## Purpose
 
-Terminalde `claude` (Claude Code) bir işi işlerken ("düşünürken"), MacBook'un dahili
-CapsLock ışığı yanıp söner. İş bitince ışık normal durumuna döner (CapsLock tuşunun
-gerçek açık/kapalı durumunu yansıtır). CapsLock tuşu bu sırada da normal işlevini
-korur — fiziksel tuşa basınca büyük/küçük harf yazımı hiç etkilenmez.
+While `claude` (Claude Code) is processing a request in the terminal, the MacBook's
+built-in CapsLock LED blinks. When it finishes, the LED returns to its normal state
+(reflecting the actual CapsLock on/off state). The physical CapsLock key keeps its
+normal function throughout — pressing it still toggles uppercase typing exactly as
+before; we never touch that behavior.
 
-Uygulama, macOS menü çubuğunda yaşayan hafif bir arka plan uygulaması
-(**ThinkingCaps.app**) olarak paketlenir; DMG olarak dağıtılır ve GitHub'da
-public (MIT lisanslı) bir repo olarak paylaşılır.
+ThinkingCaps ships as a lightweight macOS menu bar app, distributed as a DMG and
+published on GitHub as a public, MIT-licensed repo. All project files (docs, code,
+UI strings, README) are in English so it's usable by anyone who finds it, not just
+the author.
 
-## Kapsam Dışı (Non-goals)
+## Non-goals
 
-- Windows/Linux desteği yok.
-- Claude Code dışındaki araçlar (Cursor, Copilot vb.) için entegrasyon yok — ilk sürüm.
-- Kod imzalama / Apple notarization yok — ilk sürüm unsigned dağıtılır, README'de
-  Gatekeeper uyarısını geçme talimatı olur.
-- Harici (USB/Bluetooth) klavye desteği garanti edilmiyor — hedef dahili MacBook klavyesi.
-- Otomatik GitHub Actions build/release pipeline yok — ilk sürüm DMG'si elle hazırlanıp yüklenir.
+- No Windows/Linux support.
+- No integration with tools other than Claude Code (Cursor, Copilot, etc.) — v1.
+- No code signing / Apple notarization — v1 ships unsigned; README explains how to
+  bypass the Gatekeeper warning (right-click > Open).
+- No guaranteed support for external (USB/Bluetooth) keyboards — target is the
+  built-in MacBook keyboard.
+- No GitHub Actions release automation — v1 DMG is built and uploaded manually.
+- No dropdown menu on left-click, and no in-app UI for uninstalling the Claude Code
+  hook — see "Known limitations" below.
 
-## Mimari
+## Architecture
 
-Üç parça:
+Three parts:
 
-1. **Claude Code Hook Entegrasyonu** — `~/.claude/settings.json` içine `UserPromptSubmit`
-   ve `Stop` hook'ları eklenir. Bu satırları elle değil, uygulamanın kendisi
-   menüdeki "Claude Code Entegrasyonu" açma/kapama seçeneğiyle ekler/kaldırır.
-2. **ThinkingCaps.app** — Swift + AppKit ile yazılmış, `NSStatusItem` tabanlı menü
-   çubuğu uygulaması. İçinde:
-   - Yerel bir unix socket sunucusu (hook mesajlarını dinler)
-   - CapsLock LED kontrol mantığı (IOKit HID)
-   - Aktif "düşünme" oturumlarının sayacı (aşağıda "Veri Akışı")
-   - Menü UI'ı (entegrasyon aç/kapa, başlangıçta başlat, hakkında, çıkış)
-3. **Yerel Soket İletişimi** — Hook, Claude Code tarafından tetiklendiğinde kısa
-   ömürlü bir shell komutu çalıştırır; bu komut `nc -U` ile unix socket'e
-   `start <session_id>` ya da `stop <session_id>` mesajı yazar. Socket path:
-   `~/Library/Application Support/ThinkingCaps/ctl.sock`. Uygulama çalışmıyorsa
-   yazma işlemi sessizce başarısız olur (hook her koşulda `exit 0` döner, Claude
-   Code'un akışını hiçbir zaman bozmaz).
+1. **Claude Code hook integration** — On first launch, the app automatically adds
+   `UserPromptSubmit` and `Stop` hooks to `~/.claude/settings.json`. The installer
+   merges into any existing hooks array rather than overwriting it, so it won't
+   clobber hooks the user already configured for other purposes.
+2. **ThinkingCaps.app** — A Swift + AppKit menu bar app (`NSStatusItem`). Contains:
+   - A local unix socket server (listens for hook messages)
+   - CapsLock LED control logic (IOKit HID)
+   - A counter of active "thinking" sessions (see "Data Flow")
+   - An enabled/disabled flag toggled by clicking the icon
+3. **Local socket communication** — When a hook fires, Claude Code runs a short-lived
+   shell command that writes `start <session_id>` or `stop <session_id>` to a unix
+   socket via `nc -U`. Socket path: `~/Library/Application Support/ThinkingCaps/ctl.sock`.
+   If the app isn't running, the write silently fails — the hook always exits 0 and
+   never blocks or breaks Claude Code's normal flow.
 
-## Veri Akışı
+## Menu Bar Interaction
 
-1. Kullanıcı terminalde `claude`'a bir istek gönderir.
-2. Claude Code `UserPromptSubmit` hook'unu tetikler → hook, socket'e
-   `start <session_id>` yazar.
-3. ThinkingCaps, aktif oturumlar kümesine `session_id`'yi ekler. Küme boştan
-   dolu hale geçtiyse LED yanıp sönme döngüsünü başlatır (~400-500ms aralıkla toggle).
-4. Claude Code işi bitirip `Stop` hook'unu tetikler → hook, socket'e
-   `stop <session_id>` yazar.
-5. ThinkingCaps, `session_id`'yi kümeden çıkarır. Küme boşaldıysa yanıp sönmeyi
-   durdurur ve LED'i CapsLock'un gerçek açık/kapalı durumuna göre bırakır.
+- **Left-click** the icon: toggles ThinkingCaps **On**/**Off**. This is the only
+  purpose of a left-click — there is no dropdown menu.
+  - **On**: the app is armed. Incoming start/stop signals from Claude Code trigger
+    LED blinking as described in "Data Flow".
+  - **Off**: the app ignores incoming signals entirely. No blinking happens, and the
+    LED simply reflects the real CapsLock state.
+  - The icon itself visually differs between On and Off (e.g. filled vs. outline)
+    so the state is clear at a glance. It does not itself animate/blink while a
+    thinking session is active — only the physical LED does that, keeping the icon
+    simple (two states, not three).
+- **Right-click** the icon: opens a minimal context menu with exactly two items:
+  - **Launch at Login** (checkbox, toggled via `SMAppService`)
+  - **Quit ThinkingCaps**
 
-Birden fazla terminal penceresi aynı anda `claude` çalıştırıyorsa, küme boşalana
-kadar (yani hepsi bitene kadar) yanıp sönme devam eder.
+## Data Flow
 
-## Hata Durumları ve Uç Durumlar
+1. User sends a request to `claude` in the terminal.
+2. Claude Code fires the `UserPromptSubmit` hook → hook writes `start <session_id>`
+   to the socket.
+3. ThinkingCaps adds `session_id` to its set of active sessions (only takes effect
+   if the app is currently **On**). If the set went from empty to non-empty, it
+   starts the LED blink loop (~400–500ms toggle interval).
+4. Claude Code finishes and fires the `Stop` hook → hook writes `stop <session_id>`
+   to the socket.
+5. ThinkingCaps removes `session_id` from the set. If the set is now empty, it stops
+   blinking and leaves the LED reflecting the real CapsLock state.
 
-- **Yarıda kesilen oturum** (Ctrl+C, çökme, vb.): `Stop` hook'u hiç tetiklenmeyebilir.
-  Her `session_id` bir zaman damgasıyla saklanır; 10 dakika içinde `stop` gelmezse
-  oturum otomatik olarak kümeden düşürülür (sonsuza kadar yanıp sönme riski önlenir).
-- **Uygulama kapalıyken hook mesajı**: `nc -U` bağlantı hatası alır, hook yine de
-  `exit 0` ile döner — Claude Code'un çalışmasını hiçbir şekilde engellemez.
-- **Mac uyku/uyanma**: Uygulama uyanınca aktif oturum kümesini ve LED durumunu
-  sıfırdan değerlendirir (varsayım: uykuya geçişte zaten `Stop` tetiklenmiş olur;
-  değilse 10 dakikalık zaman aşımı devreye girer).
-- **Uygulama yeniden başlatılırsa**: Soket dosyası temizlenip yeniden oluşturulur;
-  önceki oturum kümesi kaybolur (kabul edilebilir — kritik olmayan bir görsel özellik).
+If multiple terminal windows are running `claude` concurrently, blinking continues
+until every session has stopped (i.e. the set is empty).
 
-## Kurulum & Dağıtım
+## Error Handling & Edge Cases
 
-1. **0. Adım — Teknik doğrulama (spike):** Gerçek uygulamayı yazmadan önce, IOKit
-   HID Manager ile dahili klavyenin CapsLock LED elementini bulup değerini
-   doğrudan değiştiren minik bir komut satırı test programı yazılır. Bu, şunları
-   doğrular:
-   - LED görsel olarak yanıp sönüyor mu?
-   - Bu işlem CapsLock'un gerçek büyük/küçük harf durumunu (modifier state)
-     etkiliyor mu? (Etkilememesi gerekiyor.)
-   - Herhangi bir özel izin (örn. Input Monitoring) gerekiyor mu?
-   - **Başarısız olursa yedek plan:** LED yerine menü çubuğu ikonunun kendisi
-     yanıp söner (aynı start/stop sinyaliyle).
-2. Xcode projesi oluşturulur (Swift + AppKit, minimal menü çubuğu uygulaması).
-3. `.app` derlenip basit bir "Applications'a sürükle" görünümlü **DMG** paketi
-   hazırlanır (`hdiutil` ile, elle çalıştırılan bir script).
-4. **GitHub'da public repo** açılır: README (kurulum adımları + Gatekeeper
-   uyarısını geçme talimatı: sağ tık > Aç), MIT LICENSE.
-5. Başlangıçta başlatma, macOS'un modern `ServiceManagement` (SMAppService) API'si
-   ile, menüdeki bir toggle üzerinden yönetilir — ayrı bir LaunchAgent plist dosyası
-   elle kurulmaz.
+- **Interrupted session** (Ctrl+C, crash, etc.): the `Stop` hook may never fire.
+  Each `session_id` is stored with a timestamp; if no `stop` arrives within 10
+  minutes, the session is auto-expired from the set (prevents blinking forever).
+- **Hook message while the app isn't running**: `nc -U` fails to connect; the hook
+  still exits 0 — Claude Code is never blocked or slowed down.
+- **App is Off when a hook message arrives**: message is received but ignored; no
+  state change, no blinking.
+- **Existing hooks already in `~/.claude/settings.json`**: the installer must merge
+  into the existing hooks array/structure, not overwrite it.
+- **Sleep/wake**: on wake, the app re-evaluates its session set and LED state from
+  scratch (assumption: `Stop` already fired before sleep in the common case; the
+  10-minute timeout is the backstop otherwise).
+- **App relaunched**: the socket file is recreated; any previous session set is
+  lost (acceptable — this is a non-critical visual feature).
 
-## Test Planı
+## Known Limitations (v1)
 
-Bu görsel/donanımsal bir özellik olduğu için otomatik test yerine elle doğrulama
-yapılır:
+- Quitting the app or fully uninstalling it does **not** remove the hook lines from
+  `~/.claude/settings.json` automatically. If the app isn't running, those hooks are
+  harmless no-ops (see error handling above), but a user who wants a truly clean
+  uninstall must remove the lines by hand. Automatic uninstall may be added later.
 
-- 0. Adım prototipiyle LED kontrolünün çalıştığı ve CapsLock işlevini bozmadığı
-  doğrulanır.
-- Uygulama çalışırken terminalde gerçek bir `claude` isteği gönderilip LED'in
-  yanıp söndüğü, istek bitince durduğu gözlemlenir.
-- Aynı anda 2 terminal penceresinde `claude` çalıştırılıp, biri bitse bile
-  diğeri bitmeden LED'in yanıp sönmeye devam ettiği doğrulanır.
-- Uygulama kapalıyken `claude` çalıştırılıp hiçbir hata/gecikme oluşmadığı
-  doğrulanır.
-- Menüden "Claude Code Entegrasyonu" kapatılıp `~/.claude/settings.json`
-  içindeki hook satırlarının temiz şekilde kaldırıldığı doğrulanır.
+## Packaging & Distribution
 
-## Açık Riskler
+1. **Step 0 — Technical spike:** Before writing the real app, build a minimal
+   command-line test program using the IOKit HID Manager to locate the built-in
+   keyboard's CapsLock LED element and toggle it directly. This validates:
+   - Does the LED visibly blink?
+   - Does this affect the real CapsLock modifier (typing) state? (It must not.)
+   - Is any special permission (e.g. Input Monitoring) required?
+   - **Fallback if this fails:** blink the menu bar icon itself instead of the LED,
+     driven by the same start/stop signal.
+2. Set up an Xcode project (Swift + AppKit, minimal menu bar app).
+3. Build the `.app` and package it into a simple "drag to Applications" **DMG**
+   (via `hdiutil`, run manually).
+4. **Public GitHub repo**: README (install steps + how to bypass the Gatekeeper
+   warning: right-click > Open), MIT LICENSE.
+5. "Launch at Login" is managed via macOS's modern `ServiceManagement`
+   (`SMAppService`) API, toggled from the right-click menu — no manually installed
+   LaunchAgent plist.
 
-- **En büyük risk:** Apple'ın son yıllardaki dahili klavye/CapsLock LED yönetim
-  değişiklikleri nedeniyle, kullanıcı alanından (user space) doğrudan LED kontrolü
-  MacBook'ta güvenilir çalışmayabilir. Bu risk 0. Adım prototipiyle en başta
-  test edilip, gerekirse menü çubuğu ikonu yanıp sönmesine geçilecek.
+## Test Plan
+
+This is a visual/hardware feature, so verification is manual rather than automated:
+
+- Confirm via the Step 0 spike that LED control works and doesn't affect real
+  CapsLock typing behavior.
+- With the app running and On, send a real `claude` request in the terminal and
+  observe the LED blinking, then stopping when the request finishes.
+- Run `claude` in two terminal windows at once; confirm blinking continues after
+  one finishes as long as the other is still active.
+- Toggle the app to Off, run a `claude` request, confirm no blinking occurs.
+- Run `claude` while the app isn't running at all; confirm no errors or delays.
+- Quit and relaunch the app; confirm it comes back up cleanly and hooks still work.
+
+## Open Risks
+
+- **Biggest risk:** Apple's changes to internal keyboard/CapsLock LED management in
+  recent macOS/hardware generations may make direct user-space LED control
+  unreliable on the built-in MacBook keyboard. This is tested first via the Step 0
+  spike; if it fails, the app falls back to blinking the menu bar icon instead.
