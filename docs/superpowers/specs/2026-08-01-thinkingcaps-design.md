@@ -46,6 +46,42 @@ Three parts:
    If the app isn't running, the write silently fails — the hook always exits 0 and
    never blocks or breaks Claude Code's normal flow.
 
+## First-Run Onboarding (added 2026-08-02)
+
+ThinkingCaps needs macOS **Input Monitoring** permission to control the CapsLock
+LED (confirmed during implementation: without it, HID device elements are
+invisible to the app and LED writes are impossible). A small native setup
+window — all UI text in English — guides the user through this:
+
+- **Launch decision** (pure, unit-testable logic):
+  - Permission missing → show the **Permission screen** (always, including when
+    the user revoked the permission later).
+  - Permission granted but onboarding never completed → show the **Success
+    screen** once.
+  - Otherwise → no window at all; the app goes straight to its menu bar
+    steady state.
+- **Permission screen:** explains in one short paragraph why Input Monitoring
+  is needed; a **Grant Permission** button triggers the system permission
+  request AND deep-links to System Settings > Privacy & Security > Input
+  Monitoring; a live status line polls the permission every second and the
+  window advances to the Success screen automatically when it's granted. A
+  note warns that macOS may quit and reopen the app when the checkbox is
+  toggled — setup resumes automatically after the relaunch (completion state
+  lives in `UserDefaults`, so the relaunched app knows to show the Success
+  screen).
+- **Success screen:** "You're all set!" plus a 3-line usage summary (LED
+  blinks while Claude Code is thinking; left-click the icon to toggle On/Off;
+  right-click for Launch at Login and Quit) and a note that the Claude Code
+  hooks were installed automatically. A **Done** button (or closing the
+  window) marks onboarding complete.
+- The menu bar icon is present the entire time — the wizard never blocks the
+  app's normal functions.
+
+Components: `OnboardingFlow.initialScreen(permissionGranted:hasCompletedOnboarding:)
+-> OnboardingScreen?` (pure logic), `InputMonitoringPermission`
+(`IOHIDCheckAccess`/`IOHIDRequestAccess` wrapper), `OnboardingWindowController`
+(programmatic AppKit window with two swappable content views).
+
 ## Menu Bar Interaction
 
 - **Left-click** the icon: toggles ThinkingCaps **On**/**Off**. This is the only
@@ -101,6 +137,15 @@ until every session has stopped (i.e. the set is empty).
   `~/.claude/settings.json` automatically. If the app isn't running, those hooks are
   harmless no-ops (see error handling above), but a user who wants a truly clean
   uninstall must remove the lines by hand. Automatic uninstall may be added later.
+- Rebuilding the app from source invalidates the ad-hoc code signature's identity,
+  which silently invalidates any previously granted Input Monitoring permission for
+  normally-launched (LaunchServices) instances — the onboarding wizard simply
+  reappears and the user re-grants. End users installing from the DMG are
+  unaffected (no rebuilds).
+- The LED targeting is filtered to the built-in keyboard (product name containing
+  "Internal Keyboard"); external keyboards' CapsLock LEDs are deliberately not
+  driven, and a hypothetical future Mac whose internal keyboard reports a
+  different product name would silently fall back to no-op (no crash).
 
 ## Packaging & Distribution
 
