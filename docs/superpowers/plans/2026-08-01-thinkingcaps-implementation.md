@@ -1498,12 +1498,13 @@ Expected: ends with `Built .build/ThinkingCaps.app` and no errors.
 2. Double-click `.build/ThinkingCaps.app` in Finder to launch it.
 3. Confirm the menu bar icon appears.
 4. Open `~/.claude/settings.json` and confirm it now contains `UserPromptSubmit` and `Stop` hooks pointing at `.../ThinkingCaps.app/Contents/MacOS/hook-notify`.
-5. Open a terminal and run a real Claude Code request: `claude -p "say hello"` (or interactively type a prompt to `claude`).
-6. Watch the physical CapsLock LED while Claude is processing — confirm it blinks — and confirm it stops blinking once Claude's response finishes.
-7. Open two terminal windows and run a `claude` request in each at roughly the same time; confirm the LED keeps blinking after the first one finishes, and only stops once both have finished.
-8. Toggle the menu bar icon Off (left-click) and run another `claude` request — confirm the LED does **not** blink this time. Toggle it back On.
-9. Quit the app (right-click > Quit), run a `claude` request with the app not running at all, and confirm the command completes normally with no errors or noticeable delay.
-10. Relaunch `.build/ThinkingCaps.app` and repeat step 5 — confirm it still works after a quit/relaunch cycle.
+5. If the LED doesn't blink in step 6 below, check System Settings > Privacy & Security > Input Monitoring — this specific app bundle may need to be enabled there the first time (confirmed necessary during Task 1's spike; macOS does not always prompt for this automatically).
+6. Open a terminal and run a real Claude Code request: `claude -p "say hello"` (or interactively type a prompt to `claude`).
+7. Watch the physical CapsLock LED while Claude is processing — confirm it blinks — and confirm it stops blinking once Claude's response finishes.
+8. Open two terminal windows and run a `claude` request in each at roughly the same time; confirm the LED keeps blinking after the first one finishes, and only stops once both have finished.
+9. Toggle the menu bar icon Off (left-click) and run another `claude` request — confirm the LED does **not** blink this time. Toggle it back On.
+10. Quit the app (right-click > Quit), run a `claude` request with the app not running at all, and confirm the command completes normally with no errors or noticeable delay.
+11. Relaunch `.build/ThinkingCaps.app` and repeat step 6 — confirm it still works after a quit/relaunch cycle.
 
 - [ ] **Step 5: Commit**
 
@@ -1642,6 +1643,11 @@ normally the whole time.
    warning. To get past it: **right-click `ThinkingCaps.app` in
    `Applications` and choose "Open"**, then click "Open" again in the dialog
    that appears. You only need to do this once.
+4. Controlling the CapsLock LED requires **Input Monitoring** permission.
+   macOS does not always show a permission prompt automatically for this —
+   if the LED doesn't blink, open **System Settings > Privacy & Security >
+   Input Monitoring**, find ThinkingCaps in the list, and enable it. You do
+   not need to relaunch the app afterward.
 
 ## Usage
 
@@ -1664,7 +1670,9 @@ of them are done.
 
 ## Troubleshooting
 
-If the LED never blinks, build and run the diagnostic tool from source:
+If the LED never blinks, first double-check the Input Monitoring permission
+above — that's the most common cause. If it's already enabled and it still
+doesn't work, build and run the diagnostic tool from source:
 
 ```bash
 git clone <this-repo-url>
@@ -1672,9 +1680,16 @@ cd thinkingcaps
 swift run LEDSpike
 ```
 
-It will report whether your keyboard exposes a controllable CapsLock LED at
-all. Some Mac keyboard generations may not support this — please open an
-issue with what it reports.
+It reports whether your keyboard exposes a controllable CapsLock LED and
+whether Input Monitoring permission is granted. Note: because this command
+runs an unbundled binary (not a proper signed `.app`), the "toggle" step at
+the end may report `FAILED` even when permission is granted and everything
+is otherwise fine — macOS appears to require a properly bundled, signed app
+(like the real ThinkingCaps.app) to actually write the LED value, not just a
+bare command-line executable. A `FAILED` toggle from this tool while the
+element was found and permission is granted is not by itself proof of a
+broken setup — please open an issue with the full output either way and
+mention whether the real app's LED blinks for you.
 
 ## Uninstalling
 
