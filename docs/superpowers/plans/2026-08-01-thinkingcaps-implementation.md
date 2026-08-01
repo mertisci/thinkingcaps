@@ -1820,11 +1820,11 @@ normally the whole time.
    warning. To get past it: **right-click `ThinkingCaps.app` in
    `Applications` and choose "Open"**, then click "Open" again in the dialog
    that appears. You only need to do this once.
-4. Controlling the CapsLock LED requires **Input Monitoring** permission.
-   macOS does not always show a permission prompt automatically for this —
-   if the LED doesn't blink, open **System Settings > Privacy & Security >
-   Input Monitoring**, find ThinkingCaps in the list, and enable it. You do
-   not need to relaunch the app afterward.
+4. On first launch, ThinkingCaps shows a short **setup window**: controlling
+   the CapsLock LED requires macOS's **Input Monitoring** permission. Click
+   **Grant Permission** and enable ThinkingCaps in the System Settings list
+   that opens. macOS may ask to quit and reopen the app — that's expected;
+   setup continues automatically after the relaunch.
 
 ## Usage
 
@@ -1847,9 +1847,10 @@ of them are done.
 
 ## Troubleshooting
 
-If the LED never blinks, first double-check the Input Monitoring permission
-above — that's the most common cause. If it's already enabled and it still
-doesn't work, build and run the diagnostic tool from source:
+If the LED never blinks, first re-check the Input Monitoring permission
+(System Settings > Privacy & Security > Input Monitoring) — the setup window
+reappears on launch whenever the permission is missing. If it's enabled and
+the LED still doesn't blink, build and run the diagnostic tool from source:
 
 ```bash
 git clone <this-repo-url>
@@ -1857,16 +1858,17 @@ cd thinkingcaps
 swift run LEDSpike
 ```
 
-It reports whether your keyboard exposes a controllable CapsLock LED and
-whether Input Monitoring permission is granted. Note: because this command
-runs an unbundled binary (not a proper signed `.app`), the "toggle" step at
-the end may report `FAILED` even when permission is granted and everything
-is otherwise fine — macOS appears to require a properly bundled, signed app
-(like the real ThinkingCaps.app) to actually write the LED value, not just a
-bare command-line executable. A `FAILED` toggle from this tool while the
-element was found and permission is granted is not by itself proof of a
-broken setup — please open an issue with the full output either way and
-mention whether the real app's LED blinks for you.
+It reports whether your keyboard exposes a controllable CapsLock LED, whether
+Input Monitoring permission is available to it, and whether each LED write is
+accepted (`ok`) or rejected (`FAILED`). `FAILED` toggles usually mean Input
+Monitoring permission is missing for your terminal (the permission applies to
+whatever app runs the command). Please open an issue with the full output and
+mention whether the installed ThinkingCaps app's LED blinks for you.
+
+Note for people building from source: rebuilding the app changes its ad-hoc
+code signature, which makes macOS silently forget the Input Monitoring grant
+for the previous build — the setup window will simply reappear; re-grant and
+continue. DMG users are unaffected.
 
 ## Uninstalling
 
@@ -1921,3 +1923,342 @@ gh release create v1.0.0 .build/ThinkingCaps.dmg --title "ThinkingCaps 1.0.0" --
 ```
 
 Confirm the release page shows the DMG as a downloadable asset, and that the README's `../../releases` link resolves to it.
+
+---
+
+### Task 14: First-run onboarding wizard (added 2026-08-02 — executes BEFORE Task 11)
+
+Added after Task 10's end-to-end verification: the user must grant Input
+Monitoring for the LED to work, and discovering that buried in System Settings
+is bad UX. This task adds a small native setup window guiding it. Execution
+order note: this task runs after Task 10 and BEFORE Task 11 (the DMG must ship
+the wizard-enabled app). All UI text is English.
+
+**Files:**
+- Modify: `Package.swift`
+- Create: `Sources/ThinkingCapsCore/InputMonitoringPermission.swift`
+- Create: `Sources/ThinkingCapsCore/OnboardingFlow.swift`
+- Create: `Sources/ThinkingCapsCore/OnboardingWindowController.swift`
+- Modify: `Sources/ThinkingCapsCore/AppDelegate.swift`
+- Test: `Sources/OnboardingFlowTests/main.swift`
+
+**Interfaces:**
+- Consumes: `AppDelegate` wiring from Task 9; the MiniTest pattern from Task 2.
+- Produces: `public enum InputMonitoringPermission { public static func isGranted() -> Bool; @discardableResult public static func request() -> Bool }`; `public enum OnboardingScreen: Equatable { case permission, success }`; `public enum OnboardingFlow { public static func initialScreen(permissionGranted: Bool, hasCompletedOnboarding: Bool) -> OnboardingScreen? }`; `public final class OnboardingWindowController: NSWindowController, NSWindowDelegate` with `public init(initialScreen: OnboardingScreen, onCompleted: @escaping () -> Void)`. Consumed only by `AppDelegate`.
+
+- [ ] **Step 1: Expand `Package.swift` to add the `OnboardingFlowTests` executable**
+
+Add this line after the `PayloadParsingTests` entry (keep every existing target unchanged):
+
+```swift
+        .executableTarget(name: "OnboardingFlowTests", dependencies: ["ThinkingCapsCore", "MiniTest"]),
+```
+
+- [ ] **Step 2: Write the failing tests**
+
+Create `Sources/OnboardingFlowTests/main.swift`:
+
+```swift
+import Foundation
+import MiniTest
+import ThinkingCapsCore
+
+let t = MiniTest()
+
+func test_noPermission_showsPermissionScreen() {
+    t.check(OnboardingFlow.initialScreen(permissionGranted: false, hasCompletedOnboarding: false) == .permission,
+            "no permission, never onboarded -> permission screen")
+}
+
+func test_noPermission_afterOnboarding_stillShowsPermissionScreen() {
+    t.check(OnboardingFlow.initialScreen(permissionGranted: false, hasCompletedOnboarding: true) == .permission,
+            "permission revoked after onboarding -> permission screen again")
+}
+
+func test_granted_firstTime_showsSuccessScreen() {
+    t.check(OnboardingFlow.initialScreen(permissionGranted: true, hasCompletedOnboarding: false) == .success,
+            "granted but onboarding not completed -> success screen")
+}
+
+func test_granted_alreadyOnboarded_showsNothing() {
+    t.check(OnboardingFlow.initialScreen(permissionGranted: true, hasCompletedOnboarding: true) == nil,
+            "granted and already onboarded -> no window")
+}
+
+test_noPermission_showsPermissionScreen()
+test_noPermission_afterOnboarding_stillShowsPermissionScreen()
+test_granted_firstTime_showsSuccessScreen()
+test_granted_alreadyOnboarded_showsNothing()
+
+t.finish()
+```
+
+- [ ] **Step 3: Run tests to verify they fail**
+
+Run: `swift run OnboardingFlowTests`
+Expected: FAIL to compile — `OnboardingFlow` doesn't exist yet.
+
+- [ ] **Step 4: Implement `InputMonitoringPermission` and `OnboardingFlow`**
+
+Create `Sources/ThinkingCapsCore/InputMonitoringPermission.swift`:
+
+```swift
+import Foundation
+import IOKit.hid
+
+public enum InputMonitoringPermission {
+    public static func isGranted() -> Bool {
+        IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted
+    }
+
+    @discardableResult
+    public static func request() -> Bool {
+        IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+    }
+}
+```
+
+Create `Sources/ThinkingCapsCore/OnboardingFlow.swift`:
+
+```swift
+public enum OnboardingScreen: Equatable {
+    case permission
+    case success
+}
+
+public enum OnboardingFlow {
+    public static func initialScreen(permissionGranted: Bool, hasCompletedOnboarding: Bool) -> OnboardingScreen? {
+        if !permissionGranted { return .permission }
+        if !hasCompletedOnboarding { return .success }
+        return nil
+    }
+}
+```
+
+- [ ] **Step 5: Run tests to verify they pass**
+
+Run: `swift run OnboardingFlowTests`
+Expected: prints four `PASS:` lines, then `4/4 passed`, exit code 0.
+
+- [ ] **Step 6: Implement `OnboardingWindowController`**
+
+Create `Sources/ThinkingCapsCore/OnboardingWindowController.swift`:
+
+```swift
+import AppKit
+
+public final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
+    private let onCompleted: () -> Void
+    private var pollTimer: Timer?
+    private var currentScreen: OnboardingScreen
+    private let statusLabel = NSTextField(labelWithString: "Status: waiting for permission…")
+
+    public init(initialScreen: OnboardingScreen, onCompleted: @escaping () -> Void) {
+        self.onCompleted = onCompleted
+        self.currentScreen = initialScreen
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 360),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "ThinkingCaps Setup"
+        super.init(window: window)
+        window.delegate = self
+        showScreen(initialScreen)
+        window.center()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
+
+    deinit {
+        pollTimer?.invalidate()
+    }
+
+    private func showScreen(_ screen: OnboardingScreen) {
+        currentScreen = screen
+        pollTimer?.invalidate()
+        pollTimer = nil
+        switch screen {
+        case .permission:
+            window?.contentView = makePermissionView()
+            startPollingForGrant()
+        case .success:
+            window?.contentView = makeSuccessView()
+        }
+    }
+
+    // MARK: - Permission screen
+
+    private func makePermissionView() -> NSView {
+        let icon = makeIconView()
+
+        let title = NSTextField(labelWithString: "Welcome to ThinkingCaps")
+        title.font = .systemFont(ofSize: 22, weight: .semibold)
+
+        let body = NSTextField(wrappingLabelWithString:
+            "ThinkingCaps blinks your keyboard's Caps Lock light while Claude Code is thinking. "
+            + "To control the light, macOS requires the Input Monitoring permission.\n\n"
+            + "Click Grant Permission, then enable ThinkingCaps in the System Settings list that opens. "
+            + "macOS may ask to quit and reopen the app — that's expected, setup continues automatically."
+        )
+        body.alignment = .center
+        body.preferredMaxLayoutWidth = 400
+
+        statusLabel.stringValue = "Status: waiting for permission…"
+        statusLabel.textColor = .secondaryLabelColor
+
+        let grantButton = NSButton(title: "Grant Permission", target: self, action: #selector(grantTapped))
+        grantButton.keyEquivalent = "\r"
+
+        let settingsButton = NSButton(title: "Open System Settings", target: self, action: #selector(openSettingsTapped))
+
+        return makeStack([icon, title, body, statusLabel, grantButton, settingsButton])
+    }
+
+    @objc private func grantTapped() {
+        InputMonitoringPermission.request()
+        openInputMonitoringSettings()
+    }
+
+    @objc private func openSettingsTapped() {
+        openInputMonitoringSettings()
+    }
+
+    private func openInputMonitoringSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    private func startPollingForGrant() {
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            if InputMonitoringPermission.isGranted() {
+                self.showScreen(.success)
+            }
+        }
+    }
+
+    // MARK: - Success screen
+
+    private func makeSuccessView() -> NSView {
+        let icon = makeIconView()
+
+        let title = NSTextField(labelWithString: "You're all set!")
+        title.font = .systemFont(ofSize: 22, weight: .semibold)
+
+        let body = NSTextField(wrappingLabelWithString:
+            "The Caps Lock light will blink while Claude Code is thinking, and stop when it's done.\n\n"
+            + "Left-click the menu bar icon to turn ThinkingCaps on or off.\n"
+            + "Right-click it for Launch at Login and Quit.\n\n"
+            + "Claude Code integration was set up automatically."
+        )
+        body.alignment = .center
+        body.preferredMaxLayoutWidth = 400
+
+        let doneButton = NSButton(title: "Done", target: self, action: #selector(doneTapped))
+        doneButton.keyEquivalent = "\r"
+
+        return makeStack([icon, title, body, doneButton])
+    }
+
+    @objc private func doneTapped() {
+        onCompleted()
+        close()
+    }
+
+    // MARK: - Shared
+
+    private func makeIconView() -> NSImageView {
+        let imageView = NSImageView()
+        if let image = NSImage(systemSymbolName: "capslock.fill", accessibilityDescription: "ThinkingCaps") {
+            image.isTemplate = true
+            imageView.image = image
+            imageView.symbolConfiguration = .init(pointSize: 44, weight: .regular)
+        }
+        return imageView
+    }
+
+    private func makeStack(_ views: [NSView]) -> NSView {
+        let stack = NSStackView(views: views)
+        stack.orientation = .vertical
+        stack.spacing = 14
+        stack.alignment = .centerX
+        stack.edgeInsets = NSEdgeInsets(top: 28, left: 36, bottom: 28, right: 36)
+        return stack
+    }
+
+    // MARK: - NSWindowDelegate
+
+    public func windowWillClose(_ notification: Notification) {
+        pollTimer?.invalidate()
+        pollTimer = nil
+        if currentScreen == .success {
+            onCompleted()
+        }
+    }
+}
+```
+
+- [ ] **Step 7: Wire it into `AppDelegate`**
+
+Modify `Sources/ThinkingCapsCore/AppDelegate.swift`. Add a stored property and a key constant alongside the existing properties:
+
+```swift
+    private var onboardingController: OnboardingWindowController?
+    private static let hasCompletedOnboardingKey = "hasCompletedOnboarding"
+```
+
+At the END of `applicationDidFinishLaunching` (after `installClaudeHookIfNeeded()`), add:
+
+```swift
+        let initialScreen = OnboardingFlow.initialScreen(
+            permissionGranted: InputMonitoringPermission.isGranted(),
+            hasCompletedOnboarding: UserDefaults.standard.bool(forKey: Self.hasCompletedOnboardingKey)
+        )
+        if let initialScreen {
+            presentOnboarding(initialScreen)
+        }
+```
+
+And add this method to the class:
+
+```swift
+    private func presentOnboarding(_ screen: OnboardingScreen) {
+        let controller = OnboardingWindowController(initialScreen: screen) {
+            UserDefaults.standard.set(true, forKey: Self.hasCompletedOnboardingKey)
+        }
+        onboardingController = controller
+        controller.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        controller.window?.makeKeyAndOrderFront(nil)
+    }
+```
+
+- [ ] **Step 8: Build and run the full test suite**
+
+Run: `swift build && swift run SessionTrackerTests && swift run BlinkerTests && swift run HookSocketServerTests && swift run ClaudeHookInstallerTests && swift run PayloadParsingTests && swift run OnboardingFlowTests`
+Expected: clean build; all suites green (6 + 6 + 8 + 6 + 3 + 4 = 33 checks).
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add Package.swift Sources/ThinkingCapsCore/InputMonitoringPermission.swift Sources/ThinkingCapsCore/OnboardingFlow.swift Sources/ThinkingCapsCore/OnboardingWindowController.swift Sources/ThinkingCapsCore/AppDelegate.swift Sources/OnboardingFlowTests/main.swift
+git commit -m "Add first-run onboarding wizard with Input Monitoring permission flow"
+```
+
+- [ ] **Step 10: Manual end-to-end wizard verification (controller + user, after rebuild)**
+
+1. `tccutil reset ListenEvent com.mertisci.thinkingcaps` (start from a clean permission state; also needed anyway since the rebuild invalidates the old grant).
+2. `defaults delete com.mertisci.thinkingcaps hasCompletedOnboarding` (simulate first run; ignore error if the key doesn't exist). Note: `defaults` keys on an unbundled `swift run` won't match — this app runs from the bundle, domain `com.mertisci.thinkingcaps`.
+3. Rebuild + launch: `./Scripts/build_app.sh && open .build/ThinkingCaps.app`.
+4. Confirm the Setup window appears showing the Permission screen, and the menu bar icon is ALSO already present.
+5. Click "Grant Permission" — confirm System Settings opens at Input Monitoring; enable ThinkingCaps; accept macOS's quit-and-reopen prompt if shown (relaunch manually otherwise).
+6. Confirm the relaunched app shows the Success screen directly.
+7. Click "Done" — window closes, app stays in the menu bar.
+8. Quit and relaunch the app — confirm NO window appears this time (steady state).
+9. Run a real `claude` request — confirm the LED blinks while it processes and stops when done.
