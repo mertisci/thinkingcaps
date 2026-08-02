@@ -80,7 +80,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        blinker?.stop()
+        socketServer?.setEnabled(false)
         socketServer?.stop()
         return .terminateNow
     }
