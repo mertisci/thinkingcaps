@@ -67,7 +67,7 @@ func drawIcon(pixelSize: Int) -> NSBitmapImageRep {
             NSColor(srgbRed: 0x16 / 255.0, green: 0x17 / 255.0, blue: 0x1F / 255.0, alpha: 1.0),
         ]
     )!
-    gradient.draw(in: tilePath, angle: 90.0)  // top -> bottom
+    gradient.draw(in: tilePath, angle: -90.0)  // top -> bottom (verified by pixel sampling; +90 put colors[0] at the bottom in this un-flipped bitmap context)
 
     // --- Glyph: capslock.fill SF Symbol, white, ~55% of tile width, centered,
     // nudged slightly above dead-center to leave room for the LED pill below it
