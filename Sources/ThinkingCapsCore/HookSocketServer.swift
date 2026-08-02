@@ -17,6 +17,15 @@ public final class HookSocketServer {
     private var isEnabled = true
     private var purgeTimer: DispatchSourceTimer?
     private let stateQueue = DispatchQueue(label: "com.thinkingcaps.hooksocketserver.state")
+    private let clientQueue = DispatchQueue(label: "com.thinkingcaps.hooksocketserver.client", attributes: .concurrent)
+
+    /// A hook client writes one short line and closes immediately. Anything that
+    /// holds the connection open longer than this is misbehaving, so drop it
+    /// rather than tie up a worker forever.
+    private static let clientReadTimeout: Int = 5
+    /// Pause between retries after `accept()` fails, so a persistent error
+    /// (EMFILE and friends) can't spin the accept thread at 100% CPU.
+    private static let acceptFailureBackoff: useconds_t = 50_000
 
     public init(socketPath: String, blinker: Blinker) {
         self.socketPath = socketPath
@@ -134,10 +143,27 @@ public final class HookSocketServer {
         while isRunning {
             let clientFD = accept(listenFD, nil, nil)
             guard clientFD >= 0 else {
-                if isRunning { continue } else { return }
+                guard isRunning else { return }
+                usleep(Self.acceptFailureBackoff)
+                continue
             }
-            handleClient(clientFD)
+            setReceiveTimeout(on: clientFD)
+            // Hand the connection to a worker so a client that connects and then
+            // goes silent can't wedge the accept loop — and with it the whole LED
+            // feature — until the app is relaunched.
+            clientQueue.async { [weak self] in
+                guard let self else {
+                    close(clientFD)
+                    return
+                }
+                self.handleClient(clientFD)
+            }
         }
+    }
+
+    private func setReceiveTimeout(on fd: Int32) {
+        var timeout = timeval(tv_sec: Self.clientReadTimeout, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
     }
 
     private func handleClient(_ fd: Int32) {
@@ -145,6 +171,8 @@ public final class HookSocketServer {
         var buffer = [UInt8](repeating: 0, count: 256)
         var received = [UInt8]()
         while true {
+            // A read that times out returns -1/EAGAIN and lands here too: whatever
+            // whole lines arrived are still handled, then the client is dropped.
             let n = read(fd, &buffer, buffer.count)
             if n <= 0 { break }
             received.append(contentsOf: buffer[0..<n])
