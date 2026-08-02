@@ -13,7 +13,7 @@
 - Platform: macOS 13.0 (Ventura) or later — required for `SMAppService`.
 - No Xcode project file — pure Swift Package Manager, no third-party dependencies.
 - All source code, comments, UI strings, docs, and repo content are in English.
-- Left-click on the menu bar icon only toggles On/Off — no dropdown menu on left-click. Right-click is the only place a menu appears. (Original menu: exactly "Launch at Login" and "Quit ThinkingCaps"; amended 2026-08-02 by Task 15: two checkable blink-output items — "Blink Caps Lock Light" default ON, "Blink Menu Bar Icon" default OFF — then a separator, then "Launch at Login" and "Quit ThinkingCaps".)
+- Left-click on the menu bar icon only toggles On/Off — no dropdown menu on left-click. Right-click is the only place a menu appears. (Original menu: exactly "Launch at Login" and "Quit ThinkingCaps"; amended 2026-08-02 by Task 15: two checkable blink-output items — "Blink Caps Lock Light" default ON, "Blink Menu Bar Icon" default OFF; amended again by Task 16: a "Blink Speed" submenu — Slow 0.8s / Normal 0.45s default / Fast 0.25s radio group — after the two toggles. Then a separator, then "Launch at Login" and "Quit ThinkingCaps".)
 - The physical CapsLock key's real typing behavior (uppercase/lowercase) must never be affected by our code — we only ever set/read the LED value, never the modifier state.
 - Every Claude Code hook command must exit 0 unconditionally and never block or slow down Claude Code, even if ThinkingCaps isn't running or errors internally.
 - Distribution for v1: ad-hoc codesign only (unsigned), public GitHub repo, MIT license.
@@ -2687,3 +2687,226 @@ git commit -m "Add independent blink outputs: Caps Lock LED and menu bar icon, t
 5. Disable Blink Caps Lock Light mid-session: LED stops immediately (restored to real state), icon keeps blinking.
 6. Disable both; drive a session: nothing blinks (menu-only silence), and the app still tracks sessions (re-enable mid-session → blinking resumes on the next ticks).
 7. Quit and relaunch: confirm both preferences survived.
+
+---
+
+### Task 16: Blink speed setting + quit-time blink restore (added 2026-08-02 — executes BEFORE Task 11)
+
+User request after Task 15: a per-user blink speed (Slow / Normal / Fast) in
+the right-click menu, applied live even mid-session. Also folds in a small
+correctness fix observed during testing: quitting the app mid-blink left the
+LED frozen at whatever frame was last written, because nothing stopped the
+Blinker on termination — `applicationShouldTerminate` must stop it so both
+outputs get restored to resting state before exit.
+
+**Files:**
+- Modify: `Sources/ThinkingCapsCore/Blinker.swift`
+- Create: `Sources/ThinkingCapsCore/BlinkSpeed.swift`
+- Modify: `Sources/ThinkingCapsCore/BlinkSettings.swift`
+- Modify: `Sources/ThinkingCapsCore/StatusItemController.swift`
+- Modify: `Sources/ThinkingCapsCore/AppDelegate.swift`
+- Test: Modify `Sources/BlinkRoutingTests/main.swift` (no `Package.swift` change — same target)
+
+**Interfaces:**
+- Consumes: everything Task 15 produced.
+- Produces: `public enum BlinkSpeed: String, CaseIterable { case slow, normal, fast }` with `var interval: TimeInterval` (0.8 / 0.45 / 0.25) and `var displayName: String` ("Slow"/"Normal"/"Fast"); `Blinker.setInterval(_ newInterval: TimeInterval)` (reschedules a running timer live); `BlinkSettings.speedKey`, `var blinkSpeed: BlinkSpeed { get }` (default `.normal` when key absent/invalid), `func setBlinkSpeed(_:)` (persists + calls `applyInterval`), `var applyInterval: ((TimeInterval) -> Void)?`; `AppDelegate` retains the `Blinker` and stops it in `applicationShouldTerminate`.
+
+- [ ] **Step 1: Extend the failing tests**
+
+Append to `Sources/BlinkRoutingTests/main.swift`, before the existing call list at the bottom (and add the new call lines to the call list, keeping its order matching definition order):
+
+```swift
+func test_blinkSpeed_defaultsToNormal() {
+    withTempDefaults { defaults in
+        let settings = BlinkSettings(defaults: defaults, led: FakeCapsLockLEDDevice(), icon: FakeCapsLockLEDDevice())
+        t.check(settings.blinkSpeed == .normal, "blink speed defaults to normal")
+    }
+}
+
+func test_blinkSpeed_persistedValueHonored() {
+    withTempDefaults { defaults in
+        defaults.set(BlinkSpeed.fast.rawValue, forKey: BlinkSettings.speedKey)
+        let settings = BlinkSettings(defaults: defaults, led: FakeCapsLockLEDDevice(), icon: FakeCapsLockLEDDevice())
+        t.check(settings.blinkSpeed == .fast, "persisted blink speed honored")
+    }
+}
+
+func test_setBlinkSpeed_persistsAndApplies() {
+    withTempDefaults { defaults in
+        let settings = BlinkSettings(defaults: defaults, led: FakeCapsLockLEDDevice(), icon: FakeCapsLockLEDDevice())
+        var applied: TimeInterval?
+        settings.applyInterval = { applied = $0 }
+        settings.setBlinkSpeed(.slow)
+        t.check(defaults.string(forKey: BlinkSettings.speedKey) == BlinkSpeed.slow.rawValue, "setBlinkSpeed persists raw value")
+        t.check(applied == BlinkSpeed.slow.interval, "setBlinkSpeed applies interval via closure")
+        t.check(settings.blinkSpeed == .slow, "getter reflects new speed")
+    }
+}
+
+func test_speedIntervals_areOrdered() {
+    t.check(BlinkSpeed.fast.interval < BlinkSpeed.normal.interval && BlinkSpeed.normal.interval < BlinkSpeed.slow.interval,
+            "fast < normal < slow intervals")
+}
+
+func test_blinker_setIntervalWhileRunning_keepsTicking() {
+    let fake = FakeCapsLockLEDDevice()
+    let blinker = Blinker(devices: [fake], interval: 0.5)
+    blinker.start()
+    blinker.setInterval(0.02)
+    Thread.sleep(forTimeInterval: 0.15)
+    blinker.stop()
+    t.check(fake.calls.count >= 3, "setInterval while running keeps ticking at the new cadence")
+}
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `swift run BlinkRoutingTests`
+Expected: FAIL to compile — `BlinkSpeed`, `BlinkSettings.speedKey`, `applyInterval`, and `Blinker.setInterval` don't exist yet.
+
+- [ ] **Step 3: Implement**
+
+Create `Sources/ThinkingCapsCore/BlinkSpeed.swift`:
+
+```swift
+import Foundation
+
+public enum BlinkSpeed: String, CaseIterable {
+    case slow
+    case normal
+    case fast
+
+    public var interval: TimeInterval {
+        switch self {
+        case .slow: return 0.8
+        case .normal: return 0.45
+        case .fast: return 0.25
+        }
+    }
+
+    public var displayName: String {
+        switch self {
+        case .slow: return "Slow"
+        case .normal: return "Normal"
+        case .fast: return "Fast"
+        }
+    }
+}
+```
+
+In `Sources/ThinkingCapsCore/Blinker.swift`, change `private let interval` to `private var interval` and add:
+
+```swift
+    public func setInterval(_ newInterval: TimeInterval) {
+        interval = newInterval
+        // Rescheduling an active DispatchSourceTimer updates its cadence live;
+        // safe to call whether or not the blinker is currently running.
+        timer?.schedule(deadline: .now() + newInterval, repeating: newInterval)
+    }
+```
+
+In `Sources/ThinkingCapsCore/BlinkSettings.swift`, add:
+
+```swift
+    public static let speedKey = "blinkSpeed"
+
+    /// Called with the new interval whenever the blink speed changes.
+    public var applyInterval: ((TimeInterval) -> Void)?
+
+    public var blinkSpeed: BlinkSpeed {
+        guard let raw = defaults.string(forKey: Self.speedKey),
+              let speed = BlinkSpeed(rawValue: raw) else {
+            return .normal
+        }
+        return speed
+    }
+
+    public func setBlinkSpeed(_ speed: BlinkSpeed) {
+        defaults.set(speed.rawValue, forKey: Self.speedKey)
+        applyInterval?(speed.interval)
+    }
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `swift run BlinkRoutingTests`
+Expected: 13 previous + 7 new = twenty `PASS:` lines, `20/20 passed`, exit 0. (Count carefully: `test_setBlinkSpeed_persistsAndApplies` alone contributes three checks.) Also `swift run BlinkerTests` still 6/6 (file untouched).
+
+- [ ] **Step 5: Add the Blink Speed submenu to `StatusItemController`**
+
+Add stored properties:
+
+```swift
+    private let blinkSpeedMenu = NSMenu()
+    private let blinkSpeedMenuItem = NSMenuItem()
+```
+
+In `configureMenu()`, after `rightClickMenu.addItem(blinkIconMenuItem)` and before the separator:
+
+```swift
+        blinkSpeedMenuItem.title = "Blink Speed"
+        rightClickMenu.addItem(blinkSpeedMenuItem)
+        for speed in BlinkSpeed.allCases {
+            let item = NSMenuItem(title: speed.displayName, action: #selector(selectBlinkSpeed(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = speed.rawValue
+            item.state = blinkSettings.blinkSpeed == speed ? .on : .off
+            blinkSpeedMenu.addItem(item)
+        }
+        rightClickMenu.setSubmenu(blinkSpeedMenu, for: blinkSpeedMenuItem)
+```
+
+Add the action:
+
+```swift
+    @objc private func selectBlinkSpeed(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let speed = BlinkSpeed(rawValue: raw) else { return }
+        blinkSettings.setBlinkSpeed(speed)
+        for item in blinkSpeedMenu.items {
+            item.state = (item.representedObject as? String) == speed.rawValue ? .on : .off
+        }
+    }
+```
+
+- [ ] **Step 6: Wire `AppDelegate`**
+
+Add a stored property `private var blinker: Blinker?`. In `applicationDidFinishLaunching`, construct the blinker with the persisted speed and keep a reference, and wire `applyInterval`:
+
+```swift
+        let blinker = Blinker(devices: [blinkSettings.ledOutput, blinkSettings.iconOutput], interval: blinkSettings.blinkSpeed.interval)
+        self.blinker = blinker
+        blinkSettings.applyInterval = { [weak blinker] interval in
+            blinker?.setInterval(interval)
+        }
+```
+
+In `applicationShouldTerminate`, stop the blinker BEFORE stopping the socket server, so both outputs are restored to resting state on quit:
+
+```swift
+    public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        blinker?.stop()
+        socketServer?.stop()
+        return .terminateNow
+    }
+```
+
+- [ ] **Step 7: Build and run the full test suite**
+
+Run: `swift build && swift run SessionTrackerTests && swift run BlinkerTests && swift run HookSocketServerTests && swift run ClaudeHookInstallerTests && swift run PayloadParsingTests && swift run OnboardingFlowTests && swift run BlinkRoutingTests`
+Expected: clean build; 6 + 6 + 8 + 6 + 3 + 4 + 20 = 53 checks, all green.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add Sources/ThinkingCapsCore/Blinker.swift Sources/ThinkingCapsCore/BlinkSpeed.swift Sources/ThinkingCapsCore/BlinkSettings.swift Sources/ThinkingCapsCore/StatusItemController.swift Sources/ThinkingCapsCore/AppDelegate.swift Sources/BlinkRoutingTests/main.swift
+git commit -m "Add blink speed setting (Slow/Normal/Fast) and restore blink outputs on quit"
+```
+
+- [ ] **Step 9: Manual verification (controller + user, after rebuild)**
+
+1. Rebuild + relaunch; wizard reappears (rebuild invalidated the grant); user re-grants; success screen; Done.
+2. Right-click: confirm Blink Speed submenu shows Slow/Normal/Fast with Normal checked.
+3. Drive a session; switch speed to Fast mid-session — cadence visibly speeds up immediately; switch to Slow — visibly slows.
+4. Quit the app mid-session (right-click > Quit while blinking) — the LED must NOT stay frozen lit; it returns to the real CapsLock state.
+5. Relaunch; confirm the chosen speed persisted (submenu checkmark + observed cadence).

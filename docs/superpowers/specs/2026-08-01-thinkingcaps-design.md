@@ -100,6 +100,8 @@ Components: `OnboardingFlow.initialScreen(permissionGranted:hasCompletedOnboardi
   - **Blink Menu Bar Icon** (checkbox, default OFF) — whether the menu bar
     icon itself blinks (disappears/reappears each tick) during thinking
     sessions
+  - **Blink Speed** (submenu, radio group): **Slow** (0.8s per toggle),
+    **Normal** (0.45s, default), **Fast** (0.25s)
   - (separator)
   - **Launch at Login** (checkbox, toggled via `SMAppService`)
   - **Quit ThinkingCaps**
@@ -118,6 +120,14 @@ immediately restores that output's resting state (LED back to the real
 CapsLock state; icon back to the normal On/Off image), so nothing is left
 frozen on a lit frame. The master left-click On/Off toggle is unchanged and
 sits above both outputs (Off = no signals processed at all).
+
+**Blink speed** (added later 2026-08-02): a "Blink Speed" submenu offers Slow
+(0.8s per toggle), Normal (0.45s, default), and Fast (0.25s). The chosen speed
+applies to both outputs, persists in `UserDefaults`, and takes effect
+immediately — including mid-session (the running blink timer is rescheduled
+live). Additionally, on normal quit the app stops any active blink session
+and restores both outputs' resting states before exiting, so quitting
+mid-blink can't leave the LED frozen on.
 
 ## Data Flow
 
