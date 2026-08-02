@@ -98,8 +98,8 @@ Components: `OnboardingFlow.initialScreen(permissionGranted:hasCompletedOnboardi
   - **Blink Caps Lock Light** (checkbox, default ON) — whether the physical
     CapsLock LED blinks during thinking sessions
   - **Blink Menu Bar Icon** (checkbox, default OFF) — whether the menu bar
-    icon itself blinks (disappears/reappears each tick) during thinking
-    sessions
+    icon itself blinks during thinking sessions, alternating between the
+    filled and outline CapsLock symbols each tick
   - **Blink Speed** (submenu, radio group): **Slow** (0.8s per toggle),
     **Normal** (0.45s, default), **Fast** (0.25s)
   - (separator)
@@ -112,8 +112,10 @@ The blink signal fans out to two independent outputs, each toggleable from the
 right-click menu and persisted in `UserDefaults`:
 
 - **Caps Lock LED** (default enabled) — the original behavior.
-- **Menu bar icon** (default disabled) — the icon alternates between its
-  normal image and blank at the same cadence as the LED.
+- **Menu bar icon** (default disabled) — the icon alternates between the
+  filled (`capslock.fill`) and outline (`capslock`) symbols at the same
+  cadence as the LED (changed 2026-08-02 from the original
+  disappear/reappear style, per user feedback).
 
 Users may enable either, both, or neither. Turning an output off mid-blink
 immediately restores that output's resting state (LED back to the real

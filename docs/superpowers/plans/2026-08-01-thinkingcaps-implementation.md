@@ -2640,10 +2640,19 @@ Modify `Sources/ThinkingCapsCore/StatusItemController.swift`:
         if visible {
             updateIcon()
         } else {
-            statusItem.button?.image = nil
+            statusItem.button?.image = Self.image(for: false)
         }
     }
 ```
+
+**Amended 2026-08-02 (user feedback after live testing):** the "hidden" frame is the
+outline CapsLock symbol (`Self.image(for: false)`), not `nil` — the icon blinks
+filled ↔ outline rather than appearing/disappearing. The `visible` branch stays
+`updateIcon()` (not a hardcoded filled image) deliberately: the same `true` call is
+also the restore path when a blink session ends, and routing it through
+`updateIcon()` keeps the final frame correct even if the user toggled the app Off
+mid-blink (the queued restore lands after the click handler and must reflect the
+new Off state, not assume On).
 
 - [ ] **Step 7: Wire it in `AppDelegate`**
 
