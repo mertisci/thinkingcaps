@@ -11,10 +11,17 @@ normally the whole time.
    [Releases](../../releases) page.
 2. Open the DMG and drag `ThinkingCaps.app` into `Applications`.
 3. Because this app isn't signed with an Apple Developer certificate, the
-   first time you open it macOS will refuse with an "unidentified developer"
-   warning. To get past it: **right-click `ThinkingCaps.app` in
-   `Applications` and choose "Open"**, then click "Open" again in the dialog
-   that appears. You only need to do this once.
+   first time you open it macOS will refuse with an "Apple could not verify…"
+   warning. To get past it on macOS 15 Sequoia or later:
+   1. Double-click `ThinkingCaps.app` and close the warning dialog.
+   2. Open **System Settings > Privacy & Security** and scroll down to
+      "ThinkingCaps was blocked to protect your Mac."
+   3. Click **Open Anyway**, then confirm in the dialog that follows (macOS
+      may ask for your password or Touch ID).
+
+   You only need to do this once. On macOS 13–14 it's simpler: right-click
+   `ThinkingCaps.app` in `Applications`, choose "Open", and click "Open"
+   again in the dialog.
 4. On first launch, ThinkingCaps shows a short **setup window**: controlling
    the CapsLock LED requires macOS's **Input Monitoring** permission. Click
    **Grant Permission** and enable ThinkingCaps in the System Settings list
@@ -35,6 +42,9 @@ normally the whole time.
   - **Blink Speed** — a submenu to pick Slow, Normal, or Fast (Normal by
     default).
   - **Launch at Login** and **Quit ThinkingCaps**.
+- On its very first run ThinkingCaps turns **Launch at Login** on for you, so
+  macOS shows a "background items added" notification — that's expected. You
+  can turn it back off any time from the right-click menu.
 - The first time it runs, ThinkingCaps automatically adds two small hooks to
   `~/.claude/settings.json` so Claude Code can tell it when a request starts
   and finishes. It merges into your existing hooks — it won't remove
@@ -75,9 +85,12 @@ continue. DMG users are unaffected.
 
 ## Uninstalling
 
+Before deleting the app, right-click the menu bar icon and turn **Launch at
+Login** off — otherwise the login item stays registered with macOS.
+
 Quitting or deleting the app does not remove the hooks it added to
-`~/.claude/settings.json`. If you want those gone too, open that file and
-remove the `hook-notify` entries under `UserPromptSubmit` and `Stop`.
+`~/.claude/settings.json` either. If you want those gone too, open that file
+and remove the `hook-notify` entries under `UserPromptSubmit` and `Stop`.
 
 ## License
 

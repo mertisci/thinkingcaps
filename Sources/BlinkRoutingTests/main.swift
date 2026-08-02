@@ -62,8 +62,9 @@ func test_setters_persistAndApply() {
         let settings = BlinkSettings(defaults: defaults, led: ledFake, icon: FakeCapsLockLEDDevice())
         settings.setLEDBlinkEnabled(false)
         t.check(defaults.bool(forKey: BlinkSettings.ledKey) == false, "setter persists to defaults")
+        let callsBeforeGatedWrite = ledFake.calls.count
         settings.ledOutput.setLEDOn(true)
-        t.check(!ledFake.calls.contains(true) || settings.isLEDBlinkEnabled == false, "setter applies to output gating")
+        t.check(ledFake.calls.count == callsBeforeGatedWrite, "setter applies to output gating (disabled output swallows the write)")
     }
 }
 

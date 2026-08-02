@@ -108,7 +108,7 @@ public final class OnboardingWindowController: NSWindowController, NSWindowDeleg
         let body = NSTextField(wrappingLabelWithString:
             "The Caps Lock light will blink while Claude Code is thinking, and stop when it's done.\n\n"
             + "Left-click the menu bar icon to turn ThinkingCaps on or off.\n"
-            + "Right-click it for Launch at Login and Quit.\n\n"
+            + "Right-click it for blink options, blink speed, Launch at Login, and Quit.\n\n"
             + "Claude Code integration was set up automatically."
         )
         body.alignment = .center
