@@ -2,6 +2,55 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+## Execution Status (as of 2026-08-02 — read this first when resuming)
+
+Execution happens in the git worktree
+`/Users/mertisci/Desktop/Home/Works/MM/thinkingcaps/.claude/worktrees/thinkingcaps-implementation`
+(branch `worktree-thinkingcaps-implementation`), via
+superpowers:subagent-driven-development. The SDD ledger with the full
+per-task history, fix rounds, deferred minors, and parked rulings is at
+`.superpowers/sdd/2026-08-01-thinkingcaps-implementation/progress.md`
+inside that worktree — trust it and `git log` over memory.
+
+**Complete (code + review + live hardware/manual verification with the user):**
+Tasks 1–10, 14, 15, 16. That includes: real CapsLock LED control proven and
+working end-to-end with real `claude` sessions (hook → socket → app → LED);
+onboarding wizard (permission screen → grant → macOS quit&reopen → success
+screen) verified; independent blink outputs (LED default on, menu-bar icon
+default off, icon blinks filled↔outline) verified; blink speed submenu
+(Slow/Normal/Fast) shipped; quit-path restore race fixed.
+
+**Remaining:** Task 11 (DMG), Task 12 (README + LICENSE — ask the user for
+the copyright name first), Task 13 (GitHub publish — user said their GitHub
+account is connected and an app is installed; still confirm before pushing,
+repo name `thinkingcaps`, public, MIT), then the final whole-branch review
+(requesting-code-review's code-reviewer on the most capable model, pointed
+at the ledger's deferred/parked list), ONE fix wave + scoped re-review, then
+superpowers:finishing-a-development-branch.
+
+**Small manual checks still open** (fold into one pre-release pass with the
+user, no need for separate ceremonies): blink-speed live switch observed;
+quit-mid-blink LED restore observed; speed persistence across relaunch; two
+concurrent `claude` sessions keep blinking until both end; Off-toggle
+ignores sessions.
+
+**Dev-loop trap (critical):** every rebuild of the ad-hoc-signed
+`.build/ThinkingCaps.app` invalidates the macOS Input Monitoring grant for
+normally-launched instances, and re-toggling the stale checkbox does NOT
+reliably re-apply it. Procedure after each rebuild: quit app, `tccutil reset
+ListenEvent com.mertisci.thinkingcaps` (or the user deletes the entry),
+relaunch — the wizard's permission screen reappears and a fresh grant works.
+DMG end users are unaffected (no rebuilds).
+
+**Live state on this machine:** the app currently runs from the worktree's
+`.build/ThinkingCaps.app` and the user's REAL `~/.claude/settings.json`
+contains hooks pointing at that `.build` path (this is the live test rig —
+the user actively uses it). When the DMG build gets installed to
+`/Applications`, the app will append new hook entries for the new path; the
+old `.build`-path entries must then be removed by hand (ClaudeHookInstaller
+appends rather than replaces when the path differs — known v1 limitation).
+Launch-at-login is also currently registered for the `.build` bundle.
+
 **Goal:** Build ThinkingCaps, a macOS menu bar app that blinks the built-in CapsLock LED while Claude Code is processing a request in the terminal, packaged as an unsigned DMG and published to a public GitHub repo.
 
 **Architecture:** A Swift Package Manager project with a small library (`ThinkingCapsCore`) holding all logic (session tracking, LED control, socket server, hook installer, launch-at-login, status bar UI), a thin `ThinkingCaps` executable that wires it into an `NSApplication`, and a separate `HookNotify` helper binary that Claude Code's hooks invoke to signal start/stop over a local unix socket. A standalone `LEDSpike` diagnostic tool validates the riskiest assumption (direct LED control) before the rest is built.
