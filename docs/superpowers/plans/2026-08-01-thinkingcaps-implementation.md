@@ -2,54 +2,44 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-## Execution Status (as of 2026-08-02 — read this first when resuming)
+## Execution Status: PROJECT COMPLETE (2026-08-03)
 
-Execution happens in the git worktree
-`/Users/mertisci/Desktop/Home/Works/MM/thinkingcaps/.claude/worktrees/thinkingcaps-implementation`
-(branch `worktree-thinkingcaps-implementation`), via
-superpowers:subagent-driven-development. The SDD ledger with the full
-per-task history, fix rounds, deferred minors, and parked rulings is at
-`.superpowers/sdd/2026-08-01-thinkingcaps-implementation/progress.md`
-inside that worktree — trust it and `git log` over memory.
+All tasks (1–17), the final whole-branch review, and its fix wave are done.
+v1.0.0 is published at https://github.com/mertisci/thinkingcaps with the
+DMG (app icon included) attached as a release asset, and the full chain —
+DMG install → Gatekeeper "Open Anyway" → onboarding wizard → Input
+Monitoring grant → hook → socket → CapsLock LED blinking — was verified
+live on real hardware from `/Applications`. The per-task SDD ledger was
+retired after completion; `git log` is the history now.
 
-**Complete (code + review + live hardware/manual verification with the user):**
-Tasks 1–10, 14, 15, 16. That includes: real CapsLock LED control proven and
-working end-to-end with real `claude` sessions (hook → socket → app → LED);
-onboarding wizard (permission screen → grant → macOS quit&reopen → success
-screen) verified; independent blink outputs (LED default on, menu-bar icon
-default off, icon blinks filled↔outline) verified; blink speed submenu
-(Slow/Normal/Fast) shipped; quit-path restore race fixed.
+**Late additions beyond the original plan:**
+- Task 17 (2026-08-03): app icon — `Scripts/make_icon.swift` generates
+  `Resources/AppIcon.icns` (capslock glyph on a graphite tile with a green
+  LED accent), bundled via `build_app.sh`.
+- Final-review fix wave: HID-handle recovery (re-locate the CapsLock LED
+  device when writes start failing, e.g. after sleep/wake), Blinker state
+  serialized on its own queue, hook-socket hardening (per-client workers +
+  `SO_RCVTIMEO` + accept backoff), hook installer now replaces its own
+  stale entries instead of appending, README Gatekeeper instructions
+  corrected for macOS 15+ ("Open Anyway" flow), onboarding copy updated.
 
-**Remaining:** Task 11 (DMG), Task 12 (README + LICENSE — ask the user for
-the copyright name first), Task 13 (GitHub publish — user said their GitHub
-account is connected and an app is installed; still confirm before pushing,
-repo name `thinkingcaps`, public, MIT), then the final whole-branch review
-(requesting-code-review's code-reviewer on the most capable model, pointed
-at the ledger's deferred/parked list), ONE fix wave + scoped re-review, then
-superpowers:finishing-a-development-branch.
+**Known deferred minors (accepted for v1, in rough priority order):**
+settings.json is rewritten on every launch even when unchanged;
+`SwitchableBlinkOutput.isEnabled` is a bare cross-thread Bool (explicit
+design directive); `HookSocketServer.isRunning` is an unsynchronized Bool;
+a newline-less client can grow the read buffer unboundedly (local-only
+surface); ctrl+left-click toggles instead of opening the menu; `codesign
+--deep` and `hdiutil create` deprecation warnings; the icon glyph reads
+soft at 16 px.
 
-**Small manual checks still open** (fold into one pre-release pass with the
-user, no need for separate ceremonies): blink-speed live switch observed;
-quit-mid-blink LED restore observed; speed persistence across relaunch; two
-concurrent `claude` sessions keep blinking until both end; Off-toggle
-ignores sessions.
-
-**Dev-loop trap (critical):** every rebuild of the ad-hoc-signed
-`.build/ThinkingCaps.app` invalidates the macOS Input Monitoring grant for
-normally-launched instances, and re-toggling the stale checkbox does NOT
-reliably re-apply it. Procedure after each rebuild: quit app, `tccutil reset
-ListenEvent com.mertisci.thinkingcaps` (or the user deletes the entry),
-relaunch — the wizard's permission screen reappears and a fresh grant works.
-DMG end users are unaffected (no rebuilds).
-
-**Live state on this machine:** the app currently runs from the worktree's
-`.build/ThinkingCaps.app` and the user's REAL `~/.claude/settings.json`
-contains hooks pointing at that `.build` path (this is the live test rig —
-the user actively uses it). When the DMG build gets installed to
-`/Applications`, the app will append new hook entries for the new path; the
-old `.build`-path entries must then be removed by hand (ClaudeHookInstaller
-appends rather than replaces when the path differs — known v1 limitation).
-Launch-at-login is also currently registered for the `.build` bundle.
+**Ad-hoc signing / permission trap (applies to every update):** each
+rebuild or app update changes the ad-hoc code signature, and macOS then
+shows the old Input Monitoring entry as enabled while silently not
+applying it (stale TCC records accumulate; toggling or removing the row is
+NOT reliable). Reliable procedure: quit the app, `tccutil reset
+ListenEvent com.mertisci.thinkingcaps`, relaunch, grant via the wizard,
+then quit and reopen the app once more (macOS does not always show its
+"quit & reopen" prompt, and the grant only applies to a fresh process).
 
 **Goal:** Build ThinkingCaps, a macOS menu bar app that blinks the built-in CapsLock LED while Claude Code is processing a request in the terminal, packaged as an unsigned DMG and published to a public GitHub repo.
 
