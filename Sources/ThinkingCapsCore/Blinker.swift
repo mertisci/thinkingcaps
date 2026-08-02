@@ -1,14 +1,18 @@
 import Foundation
 
 public final class Blinker {
-    private let device: CapsLockLEDDevice
+    private let devices: [CapsLockLEDDevice]
     private let interval: TimeInterval
     private let queue: DispatchQueue
     private var timer: DispatchSourceTimer?
     private var isLEDOn = false
 
-    public init(device: CapsLockLEDDevice, interval: TimeInterval = 0.45, queue: DispatchQueue = DispatchQueue(label: "com.thinkingcaps.blinker")) {
-        self.device = device
+    public convenience init(device: CapsLockLEDDevice, interval: TimeInterval = 0.45, queue: DispatchQueue = DispatchQueue(label: "com.thinkingcaps.blinker")) {
+        self.init(devices: [device], interval: interval, queue: queue)
+    }
+
+    public init(devices: [CapsLockLEDDevice], interval: TimeInterval = 0.45, queue: DispatchQueue = DispatchQueue(label: "com.thinkingcaps.blinker")) {
+        self.devices = devices
         self.interval = interval
         self.queue = queue
     }
@@ -22,7 +26,9 @@ public final class Blinker {
         t.setEventHandler { [weak self] in
             guard let self else { return }
             self.isLEDOn.toggle()
-            self.device.setLEDOn(self.isLEDOn)
+            for device in self.devices {
+                device.setLEDOn(self.isLEDOn)
+            }
         }
         timer = t
         t.resume()
@@ -31,6 +37,8 @@ public final class Blinker {
     public func stop() {
         timer?.cancel()
         timer = nil
-        device.setLEDOn(device.realCapsLockIsOn())
+        for device in devices {
+            device.setLEDOn(device.realCapsLockIsOn())
+        }
     }
 }

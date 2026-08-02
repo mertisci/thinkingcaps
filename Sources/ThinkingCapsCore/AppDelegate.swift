@@ -18,7 +18,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         let socketPath = appSupportDir.appendingPathComponent("ctl.sock").path
 
         let ledDevice = IOKitCapsLockLEDDevice()
-        let blinker = Blinker(device: ledDevice)
+        let iconBlinkOutput = MenuBarIconBlinkOutput()
+        let blinkSettings = BlinkSettings(led: ledDevice, icon: iconBlinkOutput)
+        let blinker = Blinker(devices: [blinkSettings.ledOutput, blinkSettings.iconOutput])
         let server = HookSocketServer(socketPath: socketPath, blinker: blinker)
         self.socketServer = server
         do {
@@ -33,7 +35,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             UserDefaults.standard.set(true, forKey: "hasRunBefore")
         }
 
-        statusItemController = StatusItemController(socketServer: server, launchAtLogin: launchAtLogin)
+        statusItemController = StatusItemController(socketServer: server, launchAtLogin: launchAtLogin, blinkSettings: blinkSettings)
+        iconBlinkOutput.setIconVisible = { [weak self] visible in
+            self?.statusItemController?.setIconBlinkFrame(visible: visible)
+        }
 
         installClaudeHookIfNeeded()
 

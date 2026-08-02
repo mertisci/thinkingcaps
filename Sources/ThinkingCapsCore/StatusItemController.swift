@@ -8,11 +8,15 @@ public final class StatusItemController: NSObject {
 
     private let rightClickMenu = NSMenu()
     private let launchAtLoginMenuItem = NSMenuItem()
+    private let blinkSettings: BlinkSettings
+    private let blinkLEDMenuItem = NSMenuItem()
+    private let blinkIconMenuItem = NSMenuItem()
 
-    public init(socketServer: HookSocketServer, launchAtLogin: LaunchAtLoginControlling) {
+    public init(socketServer: HookSocketServer, launchAtLogin: LaunchAtLoginControlling, blinkSettings: BlinkSettings) {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         self.socketServer = socketServer
         self.launchAtLogin = launchAtLogin
+        self.blinkSettings = blinkSettings
         super.init()
 
         configureButton()
@@ -30,6 +34,20 @@ public final class StatusItemController: NSObject {
     }
 
     private func configureMenu() {
+        blinkLEDMenuItem.title = "Blink Caps Lock Light"
+        blinkLEDMenuItem.target = self
+        blinkLEDMenuItem.action = #selector(toggleBlinkLED)
+        blinkLEDMenuItem.state = blinkSettings.isLEDBlinkEnabled ? .on : .off
+        rightClickMenu.addItem(blinkLEDMenuItem)
+
+        blinkIconMenuItem.title = "Blink Menu Bar Icon"
+        blinkIconMenuItem.target = self
+        blinkIconMenuItem.action = #selector(toggleBlinkIcon)
+        blinkIconMenuItem.state = blinkSettings.isIconBlinkEnabled ? .on : .off
+        rightClickMenu.addItem(blinkIconMenuItem)
+
+        rightClickMenu.addItem(.separator())
+
         launchAtLoginMenuItem.title = "Launch at Login"
         launchAtLoginMenuItem.target = self
         launchAtLoginMenuItem.action = #selector(toggleLaunchAtLogin)
@@ -60,8 +78,26 @@ public final class StatusItemController: NSObject {
         launchAtLoginMenuItem.state = newValue ? .on : .off
     }
 
+    @objc private func toggleBlinkLED() {
+        blinkSettings.setLEDBlinkEnabled(!blinkSettings.isLEDBlinkEnabled)
+        blinkLEDMenuItem.state = blinkSettings.isLEDBlinkEnabled ? .on : .off
+    }
+
+    @objc private func toggleBlinkIcon() {
+        blinkSettings.setIconBlinkEnabled(!blinkSettings.isIconBlinkEnabled)
+        blinkIconMenuItem.state = blinkSettings.isIconBlinkEnabled ? .on : .off
+    }
+
     @objc private func quit() {
         NSApp.terminate(nil)
+    }
+
+    public func setIconBlinkFrame(visible: Bool) {
+        if visible {
+            updateIcon()
+        } else {
+            statusItem.button?.image = nil
+        }
     }
 
     private func updateIcon() {
