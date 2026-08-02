@@ -13,7 +13,7 @@
 - Platform: macOS 13.0 (Ventura) or later — required for `SMAppService`.
 - No Xcode project file — pure Swift Package Manager, no third-party dependencies.
 - All source code, comments, UI strings, docs, and repo content are in English.
-- Left-click on the menu bar icon only toggles On/Off — no dropdown menu on left-click. Right-click is the only place a menu appears, containing exactly "Launch at Login" and "Quit ThinkingCaps".
+- Left-click on the menu bar icon only toggles On/Off — no dropdown menu on left-click. Right-click is the only place a menu appears. (Original menu: exactly "Launch at Login" and "Quit ThinkingCaps"; amended 2026-08-02 by Task 15: two checkable blink-output items — "Blink Caps Lock Light" default ON, "Blink Menu Bar Icon" default OFF — then a separator, then "Launch at Login" and "Quit ThinkingCaps".)
 - The physical CapsLock key's real typing behavior (uppercase/lowercase) must never be affected by our code — we only ever set/read the LED value, never the modifier state.
 - Every Claude Code hook command must exit 0 unconditionally and never block or slow down Claude Code, even if ThinkingCaps isn't running or errors internally.
 - Distribution for v1: ad-hoc codesign only (unsigned), public GitHub repo, MIT license.
@@ -2262,3 +2262,428 @@ git commit -m "Add first-run onboarding wizard with Input Monitoring permission 
 7. Click "Done" — window closes, app stays in the menu bar.
 8. Quit and relaunch the app — confirm NO window appears this time (steady state).
 9. Run a real `claude` request — confirm the LED blinks while it processes and stops when done.
+
+---
+
+### Task 15: Independent blink outputs — LED + menu bar icon (added 2026-08-02 — executes BEFORE Task 11)
+
+User request after Task 14's verification: the right-click menu gets two
+independent, persisted, checkable outputs — "Blink Caps Lock Light" (default
+ON) and "Blink Menu Bar Icon" (default OFF). Users may enable either, both,
+or neither. All UI text English.
+
+**Files:**
+- Modify: `Package.swift`
+- Modify: `Sources/ThinkingCapsCore/Blinker.swift`
+- Create: `Sources/ThinkingCapsCore/SwitchableBlinkOutput.swift`
+- Create: `Sources/ThinkingCapsCore/MenuBarIconBlinkOutput.swift`
+- Create: `Sources/ThinkingCapsCore/BlinkSettings.swift`
+- Modify: `Sources/ThinkingCapsCore/StatusItemController.swift`
+- Modify: `Sources/ThinkingCapsCore/AppDelegate.swift`
+- Test: `Sources/BlinkRoutingTests/main.swift`
+
+**Interfaces:**
+- Consumes: `CapsLockLEDDevice` protocol, `Blinker`, `FakeCapsLockLEDDevice` (ThinkingCapsTestSupport), `StatusItemController`, `AppDelegate` wiring.
+- Produces: `Blinker.init(devices: [CapsLockLEDDevice], interval:, queue:)` (new designated init; existing single-`device` init becomes a convenience forwarding to it, so `HookSocketServer` and `BlinkerTests` are untouched); `public final class SwitchableBlinkOutput: CapsLockLEDDevice` with `init(wrapping: CapsLockLEDDevice, isEnabled: Bool)` and `var isEnabled: Bool` (disabling mid-blink restores the wrapped output's resting state); `public final class MenuBarIconBlinkOutput: CapsLockLEDDevice` with `var setIconVisible: ((Bool) -> Void)?` (main-thread dispatch; `realCapsLockIsOn()` returns `true` — an icon's resting state is "visible"); `public final class BlinkSettings` with `init(defaults: UserDefaults = .standard, led: CapsLockLEDDevice, icon: CapsLockLEDDevice)`, `let ledOutput/iconOutput: SwitchableBlinkOutput`, `var isLEDBlinkEnabled/isIconBlinkEnabled: Bool { get }`, `func setLEDBlinkEnabled(_:)/setIconBlinkEnabled(_:)` (persists to keys `blinkCapsLockLED`/`blinkMenuBarIcon`; LED defaults true when key absent, icon defaults false); `StatusItemController.init(socketServer:launchAtLogin:blinkSettings:)` (new param) and `public func setIconBlinkFrame(visible: Bool)`.
+
+- [ ] **Step 1: Expand `Package.swift`**
+
+Add after the `OnboardingFlowTests` entry:
+
+```swift
+        .executableTarget(name: "BlinkRoutingTests", dependencies: ["ThinkingCapsCore", "ThinkingCapsTestSupport", "MiniTest"]),
+```
+
+- [ ] **Step 2: Write the failing tests**
+
+Create `Sources/BlinkRoutingTests/main.swift`:
+
+```swift
+import Foundation
+import MiniTest
+import ThinkingCapsCore
+import ThinkingCapsTestSupport
+
+let t = MiniTest()
+
+func withTempDefaults(_ body: (UserDefaults) -> Void) {
+    let suiteName = "com.thinkingcaps.tests.\(UUID().uuidString)"
+    guard let defaults = UserDefaults(suiteName: suiteName) else {
+        t.check(false, "could not create test UserDefaults suite")
+        return
+    }
+    body(defaults)
+    defaults.removePersistentDomain(forName: suiteName)
+}
+
+func test_defaults_ledOnIconOff() {
+    withTempDefaults { defaults in
+        let settings = BlinkSettings(defaults: defaults, led: FakeCapsLockLEDDevice(), icon: FakeCapsLockLEDDevice())
+        t.check(settings.isLEDBlinkEnabled, "LED blink defaults to enabled")
+        t.check(!settings.isIconBlinkEnabled, "icon blink defaults to disabled")
+    }
+}
+
+func test_persistedValues_areHonored() {
+    withTempDefaults { defaults in
+        defaults.set(false, forKey: BlinkSettings.ledKey)
+        defaults.set(true, forKey: BlinkSettings.iconKey)
+        let settings = BlinkSettings(defaults: defaults, led: FakeCapsLockLEDDevice(), icon: FakeCapsLockLEDDevice())
+        t.check(!settings.isLEDBlinkEnabled, "persisted LED=false honored")
+        t.check(settings.isIconBlinkEnabled, "persisted icon=true honored")
+    }
+}
+
+func test_disabledOutput_blocksWrites() {
+    let fake = FakeCapsLockLEDDevice()
+    let output = SwitchableBlinkOutput(wrapping: fake, isEnabled: false)
+    output.setLEDOn(true)
+    t.check(fake.calls.isEmpty, "disabled output blocks writes")
+}
+
+func test_enabledOutput_passesWritesThrough() {
+    let fake = FakeCapsLockLEDDevice()
+    let output = SwitchableBlinkOutput(wrapping: fake, isEnabled: true)
+    output.setLEDOn(true)
+    t.check(fake.calls.last == true, "enabled output passes writes through")
+}
+
+func test_disablingMidBlink_restoresRestingState() {
+    let fake = FakeCapsLockLEDDevice()
+    fake.realStateToReturn = true
+    let output = SwitchableBlinkOutput(wrapping: fake, isEnabled: true)
+    output.setLEDOn(false)
+    output.isEnabled = false
+    t.check(fake.calls.last == true, "disabling mid-blink restores resting state")
+}
+
+func test_setters_persistAndApply() {
+    withTempDefaults { defaults in
+        let ledFake = FakeCapsLockLEDDevice()
+        let settings = BlinkSettings(defaults: defaults, led: ledFake, icon: FakeCapsLockLEDDevice())
+        settings.setLEDBlinkEnabled(false)
+        t.check(defaults.bool(forKey: BlinkSettings.ledKey) == false, "setter persists to defaults")
+        settings.ledOutput.setLEDOn(true)
+        t.check(!ledFake.calls.contains(true) || settings.isLEDBlinkEnabled == false, "setter applies to output gating")
+    }
+}
+
+func test_blinker_fansOutToMultipleDevices() {
+    let fake1 = FakeCapsLockLEDDevice()
+    let fake2 = FakeCapsLockLEDDevice()
+    let blinker = Blinker(devices: [fake1, fake2], interval: 0.02)
+    blinker.start()
+    Thread.sleep(forTimeInterval: 0.15)
+    blinker.stop()
+    t.check(fake1.calls.count >= 2, "first device receives blink ticks")
+    t.check(fake2.calls.count >= 2, "second device receives blink ticks")
+}
+
+func test_blinkerStop_restoresEachDeviceToItsOwnRestingState() {
+    let fake1 = FakeCapsLockLEDDevice()
+    fake1.realStateToReturn = true
+    let fake2 = FakeCapsLockLEDDevice()
+    fake2.realStateToReturn = false
+    let blinker = Blinker(devices: [fake1, fake2], interval: 0.02)
+    blinker.start()
+    blinker.stop()
+    t.check(fake1.calls.last == true, "stop restores first device to its own resting state")
+    t.check(fake2.calls.last == false, "stop restores second device to its own resting state")
+}
+
+test_defaults_ledOnIconOff()
+test_persistedValues_areHonored()
+test_disabledOutput_blocksWrites()
+test_enabledOutput_passesWritesThrough()
+test_disablingMidBlink_restoresRestingState()
+test_setters_persistAndApply()
+test_blinker_fansOutToMultipleDevices()
+test_blinkerStop_restoresEachDeviceToItsOwnRestingState()
+
+t.finish()
+```
+
+- [ ] **Step 3: Run tests to verify they fail**
+
+Run: `swift run BlinkRoutingTests`
+Expected: FAIL to compile — `SwitchableBlinkOutput`, `BlinkSettings`, and `Blinker(devices:)` don't exist yet.
+
+- [ ] **Step 4: Implement the routing types and multi-device `Blinker`**
+
+Replace the `init` in `Sources/ThinkingCapsCore/Blinker.swift` and generalize to devices (the rest of the class keeps its structure; full new content):
+
+```swift
+import Foundation
+
+public final class Blinker {
+    private let devices: [CapsLockLEDDevice]
+    private let interval: TimeInterval
+    private let queue: DispatchQueue
+    private var timer: DispatchSourceTimer?
+    private var isLEDOn = false
+
+    public convenience init(device: CapsLockLEDDevice, interval: TimeInterval = 0.45, queue: DispatchQueue = DispatchQueue(label: "com.thinkingcaps.blinker")) {
+        self.init(devices: [device], interval: interval, queue: queue)
+    }
+
+    public init(devices: [CapsLockLEDDevice], interval: TimeInterval = 0.45, queue: DispatchQueue = DispatchQueue(label: "com.thinkingcaps.blinker")) {
+        self.devices = devices
+        self.interval = interval
+        self.queue = queue
+    }
+
+    public var isRunning: Bool { timer != nil }
+
+    public func start() {
+        guard timer == nil else { return }
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.schedule(deadline: .now(), repeating: interval)
+        t.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.isLEDOn.toggle()
+            for device in self.devices {
+                device.setLEDOn(self.isLEDOn)
+            }
+        }
+        timer = t
+        t.resume()
+    }
+
+    public func stop() {
+        timer?.cancel()
+        timer = nil
+        for device in devices {
+            device.setLEDOn(device.realCapsLockIsOn())
+        }
+    }
+}
+```
+
+Create `Sources/ThinkingCapsCore/SwitchableBlinkOutput.swift`:
+
+```swift
+import Foundation
+
+public final class SwitchableBlinkOutput: CapsLockLEDDevice {
+    private let wrapped: CapsLockLEDDevice
+
+    public var isEnabled: Bool {
+        didSet {
+            if !isEnabled && oldValue {
+                // Restore the wrapped output's resting state so a mid-blink
+                // disable can't freeze it on a lit frame.
+                wrapped.setLEDOn(wrapped.realCapsLockIsOn())
+            }
+        }
+    }
+
+    public init(wrapping wrapped: CapsLockLEDDevice, isEnabled: Bool) {
+        self.wrapped = wrapped
+        self.isEnabled = isEnabled
+    }
+
+    public func setLEDOn(_ on: Bool) {
+        guard isEnabled else { return }
+        wrapped.setLEDOn(on)
+    }
+
+    public func realCapsLockIsOn() -> Bool {
+        wrapped.realCapsLockIsOn()
+    }
+}
+```
+
+Create `Sources/ThinkingCapsCore/MenuBarIconBlinkOutput.swift`:
+
+```swift
+import Foundation
+
+public final class MenuBarIconBlinkOutput: CapsLockLEDDevice {
+    /// Called on the main thread with `false` for the blink's "hidden" frame
+    /// and `true` for the visible/restored frame.
+    public var setIconVisible: ((Bool) -> Void)?
+
+    public init() {}
+
+    public func setLEDOn(_ on: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            self?.setIconVisible?(on)
+        }
+    }
+
+    // The icon's resting state is always "visible"; restoring after a blink
+    // session means showing the normal icon again.
+    public func realCapsLockIsOn() -> Bool { true }
+}
+```
+
+Create `Sources/ThinkingCapsCore/BlinkSettings.swift`:
+
+```swift
+import Foundation
+
+public final class BlinkSettings {
+    public static let ledKey = "blinkCapsLockLED"
+    public static let iconKey = "blinkMenuBarIcon"
+
+    private let defaults: UserDefaults
+    public let ledOutput: SwitchableBlinkOutput
+    public let iconOutput: SwitchableBlinkOutput
+
+    public init(defaults: UserDefaults = .standard, led: CapsLockLEDDevice, icon: CapsLockLEDDevice) {
+        self.defaults = defaults
+        let ledEnabled = defaults.object(forKey: Self.ledKey) == nil ? true : defaults.bool(forKey: Self.ledKey)
+        let iconEnabled = defaults.bool(forKey: Self.iconKey)
+        self.ledOutput = SwitchableBlinkOutput(wrapping: led, isEnabled: ledEnabled)
+        self.iconOutput = SwitchableBlinkOutput(wrapping: icon, isEnabled: iconEnabled)
+    }
+
+    public var isLEDBlinkEnabled: Bool { ledOutput.isEnabled }
+    public var isIconBlinkEnabled: Bool { iconOutput.isEnabled }
+
+    public func setLEDBlinkEnabled(_ enabled: Bool) {
+        ledOutput.isEnabled = enabled
+        defaults.set(enabled, forKey: Self.ledKey)
+    }
+
+    public func setIconBlinkEnabled(_ enabled: Bool) {
+        iconOutput.isEnabled = enabled
+        defaults.set(enabled, forKey: Self.iconKey)
+    }
+}
+```
+
+Concurrency note (accepted, documented): `SwitchableBlinkOutput.isEnabled` is written from the main thread (menu clicks) and read on the blink queue. This is the same pragmatic single-writer/bool-reader pattern the reviewed `Blinker`/`HookSocketServer` already use for comparable flags; do not add locking here.
+
+- [ ] **Step 5: Run tests to verify they pass**
+
+Run: `swift run BlinkRoutingTests`
+Expected: prints twelve `PASS:` lines, then `12/12 passed`, exit code 0. Also run `swift run BlinkerTests` — the existing 6/6 must still pass via the convenience init (its file is untouched).
+
+- [ ] **Step 6: Add the menu items and icon-frame API to `StatusItemController`**
+
+Modify `Sources/ThinkingCapsCore/StatusItemController.swift`:
+
+1. Add stored properties alongside the existing menu items:
+
+```swift
+    private let blinkSettings: BlinkSettings
+    private let blinkLEDMenuItem = NSMenuItem()
+    private let blinkIconMenuItem = NSMenuItem()
+```
+
+2. Change the initializer signature and store the new dependency (everything else in `init` stays):
+
+```swift
+    public init(socketServer: HookSocketServer, launchAtLogin: LaunchAtLoginControlling, blinkSettings: BlinkSettings) {
+        self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        self.socketServer = socketServer
+        self.launchAtLogin = launchAtLogin
+        self.blinkSettings = blinkSettings
+        super.init()
+
+        configureButton()
+        configureMenu()
+        updateIcon()
+        socketServer.setEnabled(isOn)
+    }
+```
+
+3. Replace `configureMenu()` so the two blink toggles come first, then a separator, then the existing items:
+
+```swift
+    private func configureMenu() {
+        blinkLEDMenuItem.title = "Blink Caps Lock Light"
+        blinkLEDMenuItem.target = self
+        blinkLEDMenuItem.action = #selector(toggleBlinkLED)
+        blinkLEDMenuItem.state = blinkSettings.isLEDBlinkEnabled ? .on : .off
+        rightClickMenu.addItem(blinkLEDMenuItem)
+
+        blinkIconMenuItem.title = "Blink Menu Bar Icon"
+        blinkIconMenuItem.target = self
+        blinkIconMenuItem.action = #selector(toggleBlinkIcon)
+        blinkIconMenuItem.state = blinkSettings.isIconBlinkEnabled ? .on : .off
+        rightClickMenu.addItem(blinkIconMenuItem)
+
+        rightClickMenu.addItem(.separator())
+
+        launchAtLoginMenuItem.title = "Launch at Login"
+        launchAtLoginMenuItem.target = self
+        launchAtLoginMenuItem.action = #selector(toggleLaunchAtLogin)
+        launchAtLoginMenuItem.state = launchAtLogin.isEnabled ? .on : .off
+        rightClickMenu.addItem(launchAtLoginMenuItem)
+
+        let quitItem = NSMenuItem(title: "Quit ThinkingCaps", action: #selector(quit), keyEquivalent: "q")
+        quitItem.target = self
+        rightClickMenu.addItem(quitItem)
+    }
+```
+
+4. Add the two toggle actions next to `toggleLaunchAtLogin`:
+
+```swift
+    @objc private func toggleBlinkLED() {
+        blinkSettings.setLEDBlinkEnabled(!blinkSettings.isLEDBlinkEnabled)
+        blinkLEDMenuItem.state = blinkSettings.isLEDBlinkEnabled ? .on : .off
+    }
+
+    @objc private func toggleBlinkIcon() {
+        blinkSettings.setIconBlinkEnabled(!blinkSettings.isIconBlinkEnabled)
+        blinkIconMenuItem.state = blinkSettings.isIconBlinkEnabled ? .on : .off
+    }
+```
+
+5. Add the icon-frame API (used by `MenuBarIconBlinkOutput` via AppDelegate wiring):
+
+```swift
+    public func setIconBlinkFrame(visible: Bool) {
+        if visible {
+            updateIcon()
+        } else {
+            statusItem.button?.image = nil
+        }
+    }
+```
+
+- [ ] **Step 7: Wire it in `AppDelegate`**
+
+In `applicationDidFinishLaunching`, replace the device/blinker/controller construction so the blinker drives both switchable outputs and the icon output calls back into the status item controller:
+
+```swift
+        let ledDevice = IOKitCapsLockLEDDevice()
+        let iconBlinkOutput = MenuBarIconBlinkOutput()
+        let blinkSettings = BlinkSettings(led: ledDevice, icon: iconBlinkOutput)
+        let blinker = Blinker(devices: [blinkSettings.ledOutput, blinkSettings.iconOutput])
+        let server = HookSocketServer(socketPath: socketPath, blinker: blinker)
+```
+
+and after `statusItemController` is created (now passing `blinkSettings:`):
+
+```swift
+        statusItemController = StatusItemController(socketServer: server, launchAtLogin: launchAtLogin, blinkSettings: blinkSettings)
+        iconBlinkOutput.setIconVisible = { [weak self] visible in
+            self?.statusItemController?.setIconBlinkFrame(visible: visible)
+        }
+```
+
+- [ ] **Step 8: Build and run the full test suite**
+
+Run: `swift build && swift run SessionTrackerTests && swift run BlinkerTests && swift run HookSocketServerTests && swift run ClaudeHookInstallerTests && swift run PayloadParsingTests && swift run OnboardingFlowTests && swift run BlinkRoutingTests`
+Expected: clean build; all suites green (6 + 6 + 8 + 6 + 3 + 4 + 12 = 45 checks).
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add Package.swift Sources/ThinkingCapsCore/Blinker.swift Sources/ThinkingCapsCore/SwitchableBlinkOutput.swift Sources/ThinkingCapsCore/MenuBarIconBlinkOutput.swift Sources/ThinkingCapsCore/BlinkSettings.swift Sources/ThinkingCapsCore/StatusItemController.swift Sources/ThinkingCapsCore/AppDelegate.swift Sources/BlinkRoutingTests/main.swift
+git commit -m "Add independent blink outputs: Caps Lock LED and menu bar icon, toggleable from the right-click menu"
+```
+
+- [ ] **Step 10: Manual verification (controller + user, after rebuild)**
+
+1. Rebuild + relaunch (`./Scripts/build_app.sh && open .build/ThinkingCaps.app`). The rebuild invalidates the ad-hoc TCC grant — the onboarding wizard's Permission screen will reappear; re-grant (this also re-validates Task 14's wizard on a stale-grant machine).
+2. Right-click the icon: confirm the menu shows Blink Caps Lock Light (checked), Blink Menu Bar Icon (unchecked), separator, Launch at Login, Quit.
+3. Drive a blink session (real `claude` prompt or `hook-notify start`): LED blinks, icon does NOT.
+4. Enable Blink Menu Bar Icon; drive a session: LED AND icon both blink; confirm the icon returns to normal when the session ends.
+5. Disable Blink Caps Lock Light mid-session: LED stops immediately (restored to real state), icon keeps blinking.
+6. Disable both; drive a session: nothing blinks (menu-only silence), and the app still tracks sessions (re-enable mid-session → blinking resumes on the next ticks).
+7. Quit and relaunch: confirm both preferences survived.

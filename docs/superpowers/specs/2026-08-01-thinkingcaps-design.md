@@ -94,9 +94,30 @@ Components: `OnboardingFlow.initialScreen(permissionGranted:hasCompletedOnboardi
     so the state is clear at a glance. It does not itself animate/blink while a
     thinking session is active — only the physical LED does that, keeping the icon
     simple (two states, not three).
-- **Right-click** the icon: opens a minimal context menu with exactly two items:
+- **Right-click** the icon: opens a minimal context menu with exactly these items:
+  - **Blink Caps Lock Light** (checkbox, default ON) — whether the physical
+    CapsLock LED blinks during thinking sessions
+  - **Blink Menu Bar Icon** (checkbox, default OFF) — whether the menu bar
+    icon itself blinks (disappears/reappears each tick) during thinking
+    sessions
+  - (separator)
   - **Launch at Login** (checkbox, toggled via `SMAppService`)
   - **Quit ThinkingCaps**
+
+## Blink Outputs (added 2026-08-02)
+
+The blink signal fans out to two independent outputs, each toggleable from the
+right-click menu and persisted in `UserDefaults`:
+
+- **Caps Lock LED** (default enabled) — the original behavior.
+- **Menu bar icon** (default disabled) — the icon alternates between its
+  normal image and blank at the same cadence as the LED.
+
+Users may enable either, both, or neither. Turning an output off mid-blink
+immediately restores that output's resting state (LED back to the real
+CapsLock state; icon back to the normal On/Off image), so nothing is left
+frozen on a lit frame. The master left-click On/Off toggle is unchanged and
+sits above both outputs (Off = no signals processed at all).
 
 ## Data Flow
 
