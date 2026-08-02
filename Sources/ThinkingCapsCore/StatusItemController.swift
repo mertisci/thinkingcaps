@@ -118,7 +118,7 @@ public final class StatusItemController: NSObject {
         if visible {
             updateIcon()
         } else {
-            statusItem.button?.image = nil
+            statusItem.button?.image = Self.image(for: false)
         }
     }
 
