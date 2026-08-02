@@ -1,6 +1,8 @@
 import Foundation
 
 public struct ClaudeHookInstaller {
+    private static let notifierName = "hook-notify"
+
     public let settingsURL: URL
 
     public init(settingsURL: URL) {
@@ -13,11 +15,13 @@ public struct ClaudeHookInstaller {
 
         hooks["UserPromptSubmit"] = mergedEntries(
             existing: hooks["UserPromptSubmit"],
-            command: "\(notifierPath) start"
+            notifierPath: notifierPath,
+            action: "start"
         )
         hooks["Stop"] = mergedEntries(
             existing: hooks["Stop"],
-            command: "\(notifierPath) stop"
+            notifierPath: notifierPath,
+            action: "stop"
         )
 
         root["hooks"] = hooks
@@ -43,22 +47,55 @@ public struct ClaudeHookInstaller {
         try data.write(to: settingsURL, options: .atomic)
     }
 
-    private func mergedEntries(existing: Any?, command: String) -> [[String: Any]] {
-        var entries = (existing as? [[String: Any]]) ?? []
+    /// Merges our hook command into one Claude Code hook event's entry list.
+    ///
+    /// Ownership is decided by the command's *suffix*, not by an exact match:
+    /// anything ending in `/hook-notify <action>` is ours whatever path it points
+    /// at. That way moving the app (a source build → the DMG copy in
+    /// `/Applications`) repoints the existing entry instead of appending a second
+    /// one — a stale entry whose binary has since disappeared would make every
+    /// Claude Code prompt run a failing hook command. Everything we don't own is
+    /// passed through untouched.
+    private func mergedEntries(existing: Any?, notifierPath: String, action: String) -> [[String: Any]] {
+        let command = "\(notifierPath) \(action)"
+        let ownedSuffix = "/\(Self.notifierName) \(action)"
+        let entries = (existing as? [[String: Any]]) ?? []
 
-        let alreadyPresent = entries.contains { entry in
-            guard let innerHooks = entry["hooks"] as? [[String: Any]] else { return false }
-            return innerHooks.contains { ($0["command"] as? String) == command }
-        }
-        if alreadyPresent {
-            return entries
+        var merged = [[String: Any]]()
+        var didReplace = false
+
+        for var entry in entries {
+            guard let innerHooks = entry["hooks"] as? [[String: Any]] else {
+                merged.append(entry)
+                continue
+            }
+            var keptHooks = [[String: Any]]()
+            for var hook in innerHooks {
+                guard let existingCommand = hook["command"] as? String,
+                      existingCommand.hasSuffix(ownedSuffix) else {
+                    keptHooks.append(hook)
+                    continue
+                }
+                // Ours: keep the first one, repointed at the current binary. Extra
+                // copies are leftovers from installs that predate this rule.
+                if didReplace { continue }
+                hook["command"] = command
+                keptHooks.append(hook)
+                didReplace = true
+            }
+            // An entry that held nothing but stale copies of ours goes away with them.
+            if keptHooks.isEmpty && !innerHooks.isEmpty { continue }
+            entry["hooks"] = keptHooks
+            merged.append(entry)
         }
 
-        entries.append([
-            "hooks": [
-                ["type": "command", "command": command]
-            ]
-        ])
-        return entries
+        if !didReplace {
+            merged.append([
+                "hooks": [
+                    ["type": "command", "command": command]
+                ]
+            ])
+        }
+        return merged
     }
 }
