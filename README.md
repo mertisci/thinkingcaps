@@ -56,7 +56,7 @@ reappears on launch whenever the permission is missing. If it's enabled and
 the LED still doesn't blink, build and run the diagnostic tool from source:
 
 ```bash
-git clone <this-repo-url>
+git clone https://github.com/mertisci/thinkingcaps.git
 cd thinkingcaps
 swift run LEDSpike
 ```
