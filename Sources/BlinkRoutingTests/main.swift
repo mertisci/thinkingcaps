@@ -90,6 +90,48 @@ func test_blinkerStop_restoresEachDeviceToItsOwnRestingState() {
     t.check(fake2.calls.last == false, "stop restores second device to its own resting state")
 }
 
+func test_blinkSpeed_defaultsToNormal() {
+    withTempDefaults { defaults in
+        let settings = BlinkSettings(defaults: defaults, led: FakeCapsLockLEDDevice(), icon: FakeCapsLockLEDDevice())
+        t.check(settings.blinkSpeed == .normal, "blink speed defaults to normal")
+    }
+}
+
+func test_blinkSpeed_persistedValueHonored() {
+    withTempDefaults { defaults in
+        defaults.set(BlinkSpeed.fast.rawValue, forKey: BlinkSettings.speedKey)
+        let settings = BlinkSettings(defaults: defaults, led: FakeCapsLockLEDDevice(), icon: FakeCapsLockLEDDevice())
+        t.check(settings.blinkSpeed == .fast, "persisted blink speed honored")
+    }
+}
+
+func test_setBlinkSpeed_persistsAndApplies() {
+    withTempDefaults { defaults in
+        let settings = BlinkSettings(defaults: defaults, led: FakeCapsLockLEDDevice(), icon: FakeCapsLockLEDDevice())
+        var applied: TimeInterval?
+        settings.applyInterval = { applied = $0 }
+        settings.setBlinkSpeed(.slow)
+        t.check(defaults.string(forKey: BlinkSettings.speedKey) == BlinkSpeed.slow.rawValue, "setBlinkSpeed persists raw value")
+        t.check(applied == BlinkSpeed.slow.interval, "setBlinkSpeed applies interval via closure")
+        t.check(settings.blinkSpeed == .slow, "getter reflects new speed")
+    }
+}
+
+func test_speedIntervals_areOrdered() {
+    t.check(BlinkSpeed.fast.interval < BlinkSpeed.normal.interval && BlinkSpeed.normal.interval < BlinkSpeed.slow.interval,
+            "fast < normal < slow intervals")
+}
+
+func test_blinker_setIntervalWhileRunning_keepsTicking() {
+    let fake = FakeCapsLockLEDDevice()
+    let blinker = Blinker(devices: [fake], interval: 0.5)
+    blinker.start()
+    blinker.setInterval(0.02)
+    Thread.sleep(forTimeInterval: 0.15)
+    blinker.stop()
+    t.check(fake.calls.count >= 3, "setInterval while running keeps ticking at the new cadence")
+}
+
 test_defaults_ledOnIconOff()
 test_persistedValues_areHonored()
 test_disabledOutput_blocksWrites()
@@ -98,5 +140,10 @@ test_disablingMidBlink_restoresRestingState()
 test_setters_persistAndApply()
 test_blinker_fansOutToMultipleDevices()
 test_blinkerStop_restoresEachDeviceToItsOwnRestingState()
+test_blinkSpeed_defaultsToNormal()
+test_blinkSpeed_persistedValueHonored()
+test_setBlinkSpeed_persistsAndApplies()
+test_speedIntervals_areOrdered()
+test_blinker_setIntervalWhileRunning_keepsTicking()
 
 t.finish()

@@ -11,6 +11,8 @@ public final class StatusItemController: NSObject {
     private let blinkSettings: BlinkSettings
     private let blinkLEDMenuItem = NSMenuItem()
     private let blinkIconMenuItem = NSMenuItem()
+    private let blinkSpeedMenu = NSMenu()
+    private let blinkSpeedMenuItem = NSMenuItem()
 
     public init(socketServer: HookSocketServer, launchAtLogin: LaunchAtLoginControlling, blinkSettings: BlinkSettings) {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -45,6 +47,17 @@ public final class StatusItemController: NSObject {
         blinkIconMenuItem.action = #selector(toggleBlinkIcon)
         blinkIconMenuItem.state = blinkSettings.isIconBlinkEnabled ? .on : .off
         rightClickMenu.addItem(blinkIconMenuItem)
+
+        blinkSpeedMenuItem.title = "Blink Speed"
+        rightClickMenu.addItem(blinkSpeedMenuItem)
+        for speed in BlinkSpeed.allCases {
+            let item = NSMenuItem(title: speed.displayName, action: #selector(selectBlinkSpeed(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = speed.rawValue
+            item.state = blinkSettings.blinkSpeed == speed ? .on : .off
+            blinkSpeedMenu.addItem(item)
+        }
+        rightClickMenu.setSubmenu(blinkSpeedMenu, for: blinkSpeedMenuItem)
 
         rightClickMenu.addItem(.separator())
 
@@ -86,6 +99,15 @@ public final class StatusItemController: NSObject {
     @objc private func toggleBlinkIcon() {
         blinkSettings.setIconBlinkEnabled(!blinkSettings.isIconBlinkEnabled)
         blinkIconMenuItem.state = blinkSettings.isIconBlinkEnabled ? .on : .off
+    }
+
+    @objc private func selectBlinkSpeed(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let speed = BlinkSpeed(rawValue: raw) else { return }
+        blinkSettings.setBlinkSpeed(speed)
+        for item in blinkSpeedMenu.items {
+            item.state = (item.representedObject as? String) == speed.rawValue ? .on : .off
+        }
     }
 
     @objc private func quit() {

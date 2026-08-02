@@ -3,10 +3,14 @@ import Foundation
 public final class BlinkSettings {
     public static let ledKey = "blinkCapsLockLED"
     public static let iconKey = "blinkMenuBarIcon"
+    public static let speedKey = "blinkSpeed"
 
     private let defaults: UserDefaults
     public let ledOutput: SwitchableBlinkOutput
     public let iconOutput: SwitchableBlinkOutput
+
+    /// Called with the new interval whenever the blink speed changes.
+    public var applyInterval: ((TimeInterval) -> Void)?
 
     public init(defaults: UserDefaults = .standard, led: CapsLockLEDDevice, icon: CapsLockLEDDevice) {
         self.defaults = defaults
@@ -27,5 +31,18 @@ public final class BlinkSettings {
     public func setIconBlinkEnabled(_ enabled: Bool) {
         iconOutput.isEnabled = enabled
         defaults.set(enabled, forKey: Self.iconKey)
+    }
+
+    public var blinkSpeed: BlinkSpeed {
+        guard let raw = defaults.string(forKey: Self.speedKey),
+              let speed = BlinkSpeed(rawValue: raw) else {
+            return .normal
+        }
+        return speed
+    }
+
+    public func setBlinkSpeed(_ speed: BlinkSpeed) {
+        defaults.set(speed.rawValue, forKey: Self.speedKey)
+        applyInterval?(speed.interval)
     }
 }

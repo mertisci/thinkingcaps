@@ -2,7 +2,7 @@ import Foundation
 
 public final class Blinker {
     private let devices: [CapsLockLEDDevice]
-    private let interval: TimeInterval
+    private var interval: TimeInterval
     private let queue: DispatchQueue
     private var timer: DispatchSourceTimer?
     private var isLEDOn = false
@@ -32,6 +32,13 @@ public final class Blinker {
         }
         timer = t
         t.resume()
+    }
+
+    public func setInterval(_ newInterval: TimeInterval) {
+        interval = newInterval
+        // Rescheduling an active DispatchSourceTimer updates its cadence live;
+        // safe to call whether or not the blinker is currently running.
+        timer?.schedule(deadline: .now() + newInterval, repeating: newInterval)
     }
 
     public func stop() {

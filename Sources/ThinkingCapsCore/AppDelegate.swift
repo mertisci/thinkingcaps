@@ -4,6 +4,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItemController: StatusItemController?
     private var socketServer: HookSocketServer?
     private var onboardingController: OnboardingWindowController?
+    private var blinker: Blinker?
     private static let hasCompletedOnboardingKey = "hasCompletedOnboarding"
 
     public override init() {
@@ -20,7 +21,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         let ledDevice = IOKitCapsLockLEDDevice()
         let iconBlinkOutput = MenuBarIconBlinkOutput()
         let blinkSettings = BlinkSettings(led: ledDevice, icon: iconBlinkOutput)
-        let blinker = Blinker(devices: [blinkSettings.ledOutput, blinkSettings.iconOutput])
+        let blinker = Blinker(devices: [blinkSettings.ledOutput, blinkSettings.iconOutput], interval: blinkSettings.blinkSpeed.interval)
+        self.blinker = blinker
+        blinkSettings.applyInterval = { [weak blinker] interval in
+            blinker?.setInterval(interval)
+        }
         let server = HookSocketServer(socketPath: socketPath, blinker: blinker)
         self.socketServer = server
         do {
@@ -75,6 +80,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        blinker?.stop()
         socketServer?.stop()
         return .terminateNow
     }
